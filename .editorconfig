@@ -1,0 +1,28 @@
+root = true
+
+[*]
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.cs]
+indent_style = space
+indent_size = 4
+
+# C# Style
+dotnet_style_qualification_for_field = false:suggestion
+dotnet_style_qualification_for_property = false:suggestion
+dotnet_style_qualification_for_method = false:suggestion
+
+# File-scoped namespaces
+dotnet_style_namespace_types_for_namespace = true:suggestion
+
+# Sealed classes by default
+dotnet_style_keyword_var_for_types = true:suggestion
+
+[tests/**.cs]
+# Relax rules for test naming and async patterns in tests
+dotnet_diagnostic.CA1707.severity = suggestion
+dotnet_diagnostic.CA1861.severity = suggestion
+dotnet_diagnostic.CA2007.severity = suggestion

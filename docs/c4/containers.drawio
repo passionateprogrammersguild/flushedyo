@@ -1,0 +1,78 @@
+<mxfile host="app.diagrams.net" agent="flushedyo-architecture" version="24.7.6">
+  <diagram id="c4-level2" name="Level 2 - Containers">
+    <mxGraphModel dx="1400" dy="950" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="950" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="person" value="&lt;b&gt;User&lt;/b&gt;&lt;br&gt;&lt;&lt;person&gt;&gt;" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#08427B;strokeColor=#052E4D;fontColor=#FFFFFF;fontSize=12;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="40" y="430" width="160" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="boundary" value="flushedyo — Personal Finance CLI&lt;br&gt;&lt;&lt;software system&gt;&gt;" style="rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacing=10;fontSize=14;fontStyle=1;fillColor=#FFFFFF;fillOpacity=5;strokeColor=#1168BD;dashed=0;" vertex="1" parent="1">
+          <mxGeometry x="270" y="100" width="740" height="760" as="geometry" />
+        </mxCell>
+
+        <mxCell id="cli" value="&lt;b&gt;FlushedYo.Cli&lt;/b&gt;&lt;br&gt;&lt;&lt;console application&gt;&gt;&lt;br&gt;Composition root: DI host,&lt;br&gt;command routing, exit codes" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#438DD5;strokeColor=#2E6FA3;fontColor=#FFFFFF;fontSize=12;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="310" y="170" width="230" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="core" value="&lt;b&gt;FlushedYo.Core&lt;/b&gt;&lt;br&gt;&lt;&lt;class library&gt;&gt;&lt;br&gt;Contracts, models, shared logic:&lt;br&gt;config · secret store · plugin ·&lt;br&gt;tracking · store · commands" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#438DD5;strokeColor=#2E6FA3;fontColor=#FFFFFF;fontSize=12;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="600" y="170" width="320" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ledger" value="&lt;b&gt;SQLite Ledger&lt;/b&gt;&lt;br&gt;&lt;&lt;database&gt;&gt;&lt;br&gt;data/flushedyo.db&lt;br&gt;transactions · download_runs&lt;br&gt;PRAGMA user_version migrations" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#438DD5;strokeColor=#2E6FA3;fontColor=#FFFFFF;fontSize=12;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="310" y="430" width="250" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="plugin-dirs" value="&lt;b&gt;Plugin Directories&lt;/b&gt;&lt;br&gt;&lt;&lt;file system&gt;&gt;&lt;br&gt;plugins/&lt;institution&gt;: plugin.json,&lt;br&gt;config.json, skills/, tools/, assembly" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#438DD5;strokeColor=#2E6FA3;fontColor=#FFFFFF;fontSize=12;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="620" y="430" width="300" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="plugin-assemblies" value="&lt;b&gt;Institution Plugins&lt;/b&gt;&lt;br&gt;&lt;&lt;dynamically loaded assemblies&gt;&gt;&lt;br&gt;FlushedYo.Plugins.* implementing IProviderPlugin,&lt;br&gt;loaded into collectible AssemblyLoadContexts" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#438DD5;strokeColor=#2E6FA3;fontColor=#FFFFFF;fontSize=12;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="310" y="660" width="610" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ext-bw" value="&lt;b&gt;Bitwarden MCP Server&lt;/b&gt;&lt;br&gt;&lt;&lt;process&gt;&gt;&lt;br&gt;@bitwarden/mcp-server&lt;br&gt;stdio via npx, or HTTP" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#999999;strokeColor=#6C6C6C;fontColor=#FFFFFF;fontSize=12;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1070" y="170" width="280" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ext-pw" value="&lt;b&gt;Playwright MCP Server&lt;/b&gt;&lt;br&gt;&lt;&lt;process&gt;&gt;&lt;br&gt;Browser automation for login and&lt;br&gt;extraction (planned)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#999999;strokeColor=#6C6C6C;fontColor=#FFFFFF;fontSize=12;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1070" y="430" width="280" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ext-web" value="&lt;b&gt;Institution Web Apps&lt;/b&gt;&lt;br&gt;&lt;&lt;web application&gt;&gt;&lt;br&gt;Fidelity, Schwab account portals" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#999999;strokeColor=#6C6C6C;fontColor=#FFFFFF;fontSize=12;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1070" y="690" width="280" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e1" value="runs commands" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="person" target="cli">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e2" value="uses DI host + command routing" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="cli" target="core">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e3" value="parameterized SQL&lt;br&gt;(INSERT OR IGNORE dedup)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0;exitY=0.5;entryX=1;entryY=0.5;" edge="1" parent="1" source="core" target="ledger">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e4" value="scans &amp; validates&lt;br&gt;plugin.json / config.json" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.3;entryX=0;entryY=0.5;" edge="1" parent="1" source="core" target="plugin-dirs">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e5" value="loads into collectible ALC;&lt;br&gt;constructs with PluginContext" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.7;entryX=0;entryY=0.5;" edge="1" parent="1" source="core" target="plugin-assemblies">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e6" value="resolves credential keys&lt;br&gt;(ISecretStore in PluginContext)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#6C6C6C;fontColor=#6C6C6C;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="plugin-assemblies" target="ext-bw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e7" value="downloads transactions (planned)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#6C6C6C;fontColor=#6C6C6C;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=1;entryX=0;entryY=0.5;" edge="1" parent="1" source="plugin-assemblies" target="ext-web">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e8" value="MCP get tool calls&lt;br&gt;(get-secret · login)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#6C6C6C;fontColor=#6C6C6C;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.1;entryX=0;entryY=0.5;" edge="1" parent="1" source="core" target="ext-bw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="e9" value="orchestrates browser automation (planned)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#6C6C6C;fontColor=#6C6C6C;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.9;entryX=0;entryY=0.5;" edge="1" parent="1" source="core" target="ext-pw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

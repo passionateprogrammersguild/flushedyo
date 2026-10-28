@@ -1,0 +1,9 @@
+{
+  "bitwardenMcpUrl": "http://localhost:3000",
+  "playwrightMcpUrl": "http://localhost:3001",
+  "headless": true,
+  "credentialKeys": {
+    "username": "dummy/username",
+    "password": "dummy/password"
+  }
+}

@@ -1,0 +1,39 @@
+# Build output
+dist/
+build/
+bin/
+obj/
+
+# IDE
+.idea/
+.vscode/
+*.user
+*.swp
+*.swo
+
+# Secrets and credentials
+*.secret
+*.key
+*.pem
+
+# SQLite database (local ledger)
+data/
+flushedyo.db
+
+# Plugin directories (secrets should be external)
+plugins/*/secrets*
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# testing
+coveragereport/
+
+# other
+plan.md
+.opencode/

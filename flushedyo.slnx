@@ -1,0 +1,10 @@
+<Solution>
+  <Project Path="src/FlushedYo.Cli/FlushedYo.Cli.csproj" />
+  <Project Path="src/FlushedYo.Core/FlushedYo.Core.csproj" />
+  <Project Path="tests/FlushedYo.Core.Tests/FlushedYo.Core.Tests.csproj" />
+  <Project Path="tests/FlushedYo.Core.PropertyTests/FlushedYo.Core.PropertyTests.csproj" />
+  <Project Path="tests/FlushedYo.ArchitectureTests/FlushedYo.ArchitectureTests.csproj" />
+  <Project Path="tests/FlushedYo.Tests.FakeMcpServer/FlushedYo.Tests.FakeMcpServer.csproj" />
+  <Project Path="tests/FlushedYo.IntegrationTests/FlushedYo.IntegrationTests.csproj" />
+  <Project Path="tests/FlushedYo.Tests.StubPlugin/FlushedYo.Tests.StubPlugin.csproj" />
+</Solution>

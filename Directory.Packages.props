@@ -1,0 +1,32 @@
+<Project>
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
+    <CentralPackageVersionOverrideEnabled>false</CentralPackageVersionOverrideEnabled>
+  </PropertyGroup>
+  <PropertyGroup>
+    <MicrosoftExtensionsVersion>10.0.14</MicrosoftExtensionsVersion>
+    <ModelContextProtocolVersion>2.3.0</ModelContextProtocolVersion>
+    <XunitVersion>4.0.2</XunitVersion>
+    <ArchUnitNetVersion>0.13.5</ArchUnitNetVersion>
+  </PropertyGroup>
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.Data.Sqlite" Version="10.0.14" />
+    <PackageVersion Include="FsCheck" Version="3.6.0" />
+    <PackageVersion Include="TngTech.ArchUnitNET" Version="$(ArchUnitNetVersion)" />
+    <PackageVersion Include="TngTech.ArchUnitNET.xUnitV3" Version="$(ArchUnitNetVersion)" />
+    <PackageVersion Include="FsCheck.Xunit.v3" Version="3.6.0" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration" Version="[10.0.14, )" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.Binder" Version="[10.0.14, )" />
+    <PackageVersion Include="Microsoft.Extensions.Configuration.EnvironmentVariables" Version="[10.0.14, )" />
+    <PackageVersion Include="Microsoft.Extensions.Hosting" Version="[10.0.14, )" />
+    <PackageVersion Include="Microsoft.Extensions.Logging.Abstractions" Version="[10.0.14, )" />
+    <PackageVersion Include="Microsoft.Extensions.Options" Version="[10.0.14, )" />
+    <PackageVersion Include="ModelContextProtocol" Version="[2.3.0, )" />
+    <PackageVersion Include="xunit.v3" Version="[4.0.2, )" />
+    <PackageVersion Include="Microsoft.Testing.Extensions.CodeCoverage" Version="18.12.0" />
+  </ItemGroup>
+  <ItemGroup>
+    <GlobalPackageReference Include="Microsoft.CodeAnalysis.NetAnalyzers" Version="10.0.100" />
+  </ItemGroup>
+</Project>

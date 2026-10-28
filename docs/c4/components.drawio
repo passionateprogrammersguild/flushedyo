@@ -1,0 +1,120 @@
+<mxfile host="app.diagrams.net" agent="flushedyo-architecture" version="24.7.6">
+  <diagram id="c4-level3" name="Level 3 - Components">
+    <mxGraphModel dx="1700" dy="1000" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1700" pageHeight="1000" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="boundary-cli" value="FlushedYo.Cli&lt;br&gt;&lt;&lt;console application&gt;&gt;" style="rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacing=10;fontSize=13;fontStyle=1;fillColor=#FFFFFF;fillOpacity=5;strokeColor=#438DD5;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="80" width="310" height="520" as="geometry" />
+        </mxCell>
+
+        <mxCell id="program" value="&lt;b&gt;Program&lt;/b&gt;&lt;br&gt;&lt;&lt;component&gt;&gt;&lt;br&gt;Host + DI composition, arg parsing,&lt;br&gt;command routing, exit codes&lt;br&gt;(0 · 1 · 2 · 130)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#85BBF0;strokeColor=#5B7DB1;fontColor=#1A1A1A;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="70" y="170" width="250" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="boundary-core" value="FlushedYo.Core&lt;br&gt;&lt;&lt;class library&gt;&gt;" style="rounded=1;whiteSpace=wrap;html=1;verticalAlign=top;align=left;spacing=10;fontSize=13;fontStyle=1;fillColor=#FFFFFF;fillOpacity=5;strokeColor=#438DD5;dashed=1;" vertex="1" parent="1">
+          <mxGeometry x="420" y="40" width="1060" height="800" as="geometry" />
+        </mxCell>
+
+        <mxCell id="config" value="&lt;b&gt;Configuration&lt;/b&gt;&lt;br&gt;&lt;&lt;component&gt;&gt;&lt;br&gt;FlushedYoOptions binding,&lt;br&gt;RepositoryPathResolver" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#85BBF0;strokeColor=#5B7DB1;fontColor=#1A1A1A;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="460" y="140" width="210" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="secretstore" value="&lt;b&gt;SecretStore&lt;/b&gt;&lt;br&gt;&lt;&lt;component&gt;&gt;&lt;br&gt;ISecretStore: BitwardenMcp,&lt;br&gt;EnvironmentVariable" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#85BBF0;strokeColor=#5B7DB1;fontColor=#1A1A1A;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="740" y="140" width="210" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="plugin" value="&lt;b&gt;Plugin&lt;/b&gt;&lt;br&gt;&lt;&lt;component&gt;&gt;&lt;br&gt;Loader · Catalog · FileParser ·&lt;br&gt;AssemblyLoader · Selector ·&lt;br&gt;Context" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#85BBF0;strokeColor=#5B7DB1;fontColor=#1A1A1A;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="740" y="320" width="210" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="commands" value="&lt;b&gt;Commands&lt;/b&gt;&lt;br&gt;&lt;&lt;component&gt;&gt;&lt;br&gt;CommandLineParser, Login, Download,&lt;br&gt;Status + table/JSON formatters" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#85BBF0;strokeColor=#5B7DB1;fontColor=#1A1A1A;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="460" y="320" width="210" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="services" value="&lt;b&gt;Services&lt;/b&gt;&lt;br&gt;&lt;&lt;component&gt;&gt;&lt;br&gt;LoginService · DownloadService ·&lt;br&gt;StatusService" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#85BBF0;strokeColor=#5B7DB1;fontColor=#1A1A1A;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="460" y="530" width="210" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="tracking" value="&lt;b&gt;Tracking&lt;/b&gt;&lt;br&gt;&lt;&lt;component&gt;&gt;&lt;br&gt;CanonicalTransactionHasher,&lt;br&gt;TransactionTracker" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#85BBF0;strokeColor=#5B7DB1;fontColor=#1A1A1A;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="740" y="530" width="210" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="store" value="&lt;b&gt;Store&lt;/b&gt;&lt;br&gt;&lt;&lt;component&gt;&gt;&lt;br&gt;LedgerDatabase (lazy + migrations),&lt;br&gt;SqliteTransactionStore,&lt;br&gt;SqliteRunHistoryStore" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#85BBF0;strokeColor=#5B7DB1;fontColor=#1A1A1A;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="140" width="230" height="130" as="geometry" />
+        </mxCell>
+
+        <mxCell id="models" value="&lt;b&gt;Models&lt;/b&gt;&lt;br&gt;&lt;&lt;component&gt;&gt;&lt;br&gt;Transaction · Holding&lt;br&gt;(canonical records)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#85BBF0;strokeColor=#5B7DB1;fontColor=#1A1A1A;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1030" y="340" width="230" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ledger-db" value="&lt;b&gt;SQLite Ledger&lt;/b&gt;&lt;br&gt;&lt;&lt;database&gt;&gt;&lt;br&gt;data/flushedyo.db" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#999999;strokeColor=#6C6C6C;fontColor=#FFFFFF;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1550" y="140" width="220" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="plugin-dirs" value="&lt;b&gt;Plugin Directories&lt;/b&gt;&lt;br&gt;&lt;&lt;file system&gt;&gt;&lt;br&gt;plugins/&lt;institution&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#999999;strokeColor=#6C6C6C;fontColor=#FFFFFF;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1550" y="340" width="220" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="plugin-assemblies" value="&lt;b&gt;Institution Plugins&lt;/b&gt;&lt;br&gt;&lt;&lt;loaded assemblies&gt;&gt;&lt;br&gt;IProviderPlugin instances" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#999999;strokeColor=#6C6C6C;fontColor=#FFFFFF;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1550" y="530" width="220" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ext-bw" value="&lt;b&gt;Bitwarden MCP Server&lt;/b&gt;&lt;br&gt;&lt;&lt;process&gt;&gt;" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#999999;strokeColor=#6C6C6C;fontColor=#FFFFFF;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1550" y="720" width="220" height="100" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ext-pw" value="&lt;b&gt;Playwright MCP Server&lt;/b&gt;&lt;br&gt;&lt;&lt;process&gt;&gt;&lt;br&gt;(planned)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#999999;strokeColor=#6C6C6C;fontColor=#FFFFFF;fontSize=11;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="1550" y="890" width="220" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="ce1" value="routes commands" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="program" target="commands">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce2" value="registers ISecretStore factory" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.2;entryX=0;entryY=0.5;" edge="1" parent="1" source="program" target="secretstore">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce3" value="registers PluginCatalog" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.4;" edge="1" parent="1" source="program" target="plugin">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce4" value="registers stores (singletons)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.9;entryX=0;entryY=0.2;" edge="1" parent="1" source="program" target="store">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce5" value="calls services" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=0.5;exitY=1;entryX=0.5;entryY=0;" edge="1" parent="1" source="commands" target="services">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce6" value="catalog · selector · loader" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="services" target="plugin">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce7" value="LoginService → SecretExistsAsync" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.2;entryX=0;entryY=0.8;" edge="1" parent="1" source="services" target="secretstore">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce8" value="DownloadService → TrackAsync" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="services" target="tracking">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce9" value="RecordTransactionAsync(tx, audit)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.7;" edge="1" parent="1" source="tracking" target="store">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce10" value="run history reads/writes" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.8;entryX=0;entryY=0.4;" edge="1" parent="1" source="services" target="store">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce11" value="scans &amp; validates manifests" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.3;entryX=0;entryY=0.5;" edge="1" parent="1" source="plugin" target="plugin-dirs">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce12" value="loads &amp; constructs (ALC)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.7;entryX=0;entryY=0.5;" edge="1" parent="1" source="plugin" target="plugin-assemblies">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce13" value="parameterized SQL" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeColor=#707070;fontColor=#707070;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="store" target="ledger-db">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce14" value="MCP get tool calls" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#6C6C6C;fontColor=#6C6C6C;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="secretstore" target="ext-bw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="ce15" value="browser automation (planned)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;dashed=1;strokeColor=#6C6C6C;fontColor=#6C6C6C;fontSize=10;labelBackgroundColor=#FFFFFF;exitX=1;exitY=0.5;entryX=0;entryY=0.5;" edge="1" parent="1" source="plugin-assemblies" target="ext-pw">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

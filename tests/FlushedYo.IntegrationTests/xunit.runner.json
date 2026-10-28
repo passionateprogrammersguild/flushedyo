@@ -1,0 +1,6 @@
+{
+  "parallelMode": "collections",
+  "maxParallelThreads": 8,
+  "diagnosticMessages": false,
+  "longRunningTestSeconds": 10
+}

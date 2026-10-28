@@ -1,0 +1,157 @@
+<mxfile host="app.diagrams.net" agent="flushedyo-architecture" version="24.7.6">
+  <diagram id="c4-dynamic" name="Dynamic - download flow">
+    <mxGraphModel dx="1450" dy="1180" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1450" pageHeight="1180" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="user" value="User" style="shape=umlLifeline;whiteSpace=wrap;html=1;fillColor=#08427B;strokeColor=#052E4D;fontColor=#FFFFFF;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="40" y="40" width="90" height="1120" as="geometry" />
+        </mxCell>
+        <mxCell id="cli" value="FlushedYo.Cli&lt;br&gt;(Program)" style="shape=umlLifeline;whiteSpace=wrap;html=1;fillColor=#1168BD;strokeColor=#0D4E8F;fontColor=#FFFFFF;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="180" y="40" width="110" height="1120" as="geometry" />
+        </mxCell>
+        <mxCell id="cmd" value="DownloadCommand" style="shape=umlLifeline;whiteSpace=wrap;html=1;fillColor=#438DD5;strokeColor=#2E6FA3;fontColor=#FFFFFF;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="330" y="40" width="120" height="1120" as="geometry" />
+        </mxCell>
+        <mxCell id="svc" value="DownloadService" style="shape=umlLifeline;whiteSpace=wrap;html=1;fillColor=#438DD5;strokeColor=#2E6FA3;fontColor=#FFFFFF;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="490" y="40" width="120" height="1120" as="geometry" />
+        </mxCell>
+        <mxCell id="machinery" value="Plugin machinery&lt;br&gt;(Catalog + AssemblyLoader)" style="shape=umlLifeline;whiteSpace=wrap;html=1;fillColor=#438DD5;strokeColor=#2E6FA3;fontColor=#FFFFFF;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="650" y="40" width="140" height="1120" as="geometry" />
+        </mxCell>
+        <mxCell id="plugin" value="IProviderPlugin&lt;br&gt;(loaded assembly)" style="shape=umlLifeline;whiteSpace=wrap;html=1;fillColor=#438DD5;strokeColor=#2E6FA3;fontColor=#FFFFFF;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="830" y="40" width="110" height="1120" as="geometry" />
+        </mxCell>
+        <mxCell id="secretstore" value="ISecretStore&lt;br&gt;(Bitwarden MCP)" style="shape=umlLifeline;whiteSpace=wrap;html=1;fillColor=#438DD5;strokeColor=#2E6FA3;fontColor=#FFFFFF;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="980" y="40" width="120" height="1120" as="geometry" />
+        </mxCell>
+        <mxCell id="tracker" value="TransactionTracker" style="shape=umlLifeline;whiteSpace=wrap;html=1;fillColor=#438DD5;strokeColor=#2E6FA3;fontColor=#FFFFFF;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1140" y="40" width="120" height="1120" as="geometry" />
+        </mxCell>
+        <mxCell id="stores" value="SQLite Stores&lt;br&gt;(Transaction + RunHistory)" style="shape=umlLifeline;whiteSpace=wrap;html=1;fillColor=#438DD5;strokeColor=#2E6FA3;fontColor=#FFFFFF;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="1300" y="40" width="140" height="1120" as="geometry" />
+        </mxCell>
+
+        <mxCell id="m1" value="flushedyo download --plugin fidelity" style="endArrow=block;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="85" y="150" as="sourcePoint" />
+            <mxPoint x="235" y="150" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m2" value="ExecuteAsync(options, out, err, ct)" style="endArrow=block;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="235" y="200" as="sourcePoint" />
+            <mxPoint x="390" y="200" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m3" value="GetPluginsAsync() + Select" style="endArrow=block;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="390" y="250" as="sourcePoint" />
+            <mxPoint x="720" y="250" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m4" value="PluginDescriptor[]" style="endArrow=open;dashed=1;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="720" y="300" as="sourcePoint" />
+            <mxPoint x="390" y="300" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m5" value="RunAsync(selected)" style="endArrow=block;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="390" y="350" as="sourcePoint" />
+            <mxPoint x="550" y="350" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m6" value="Load(descriptor) → LoadedPlugin" style="endArrow=block;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="550" y="400" as="sourcePoint" />
+            <mxPoint x="720" y="400" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m7" value="construct with PluginContext&lt;br&gt;(descriptor, secret store, logger)" style="endArrow=block;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="720" y="450" as="sourcePoint" />
+            <mxPoint x="885" y="450" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m8" value="DownloadTransactionsAsync(ct)" style="endArrow=block;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="550" y="500" as="sourcePoint" />
+            <mxPoint x="885" y="500" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m9" value="GetSecretAsync(key) [if credentials needed]" style="endArrow=block;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="885" y="550" as="sourcePoint" />
+            <mxPoint x="1040" y="550" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m10" value="secret value (memory only; never logged/persisted)" style="endArrow=open;dashed=1;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1040" y="600" as="sourcePoint" />
+            <mxPoint x="885" y="600" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m11" value="IEnumerable&lt;Transaction&gt;" style="endArrow=open;dashed=1;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="885" y="650" as="sourcePoint" />
+            <mxPoint x="550" y="650" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m12" value="TrackAsync(txns, pluginVersion, ct)" style="endArrow=block;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="550" y="700" as="sourcePoint" />
+            <mxPoint x="1200" y="700" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m13" value="RecordTransactionAsync(tx, audit) [INSERT OR IGNORE]&lt;br&gt;per transaction" style="endArrow=block;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1200" y="750" as="sourcePoint" />
+            <mxPoint x="1370" y="750" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m14" value="true inserted / false duplicate" style="endArrow=open;dashed=1;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1370" y="800" as="sourcePoint" />
+            <mxPoint x="1200" y="800" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m15" value="TrackingResult(inserted · skipped · rejected)" style="endArrow=open;dashed=1;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="1200" y="850" as="sourcePoint" />
+            <mxPoint x="550" y="850" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m16" value="RecordRunAsync(DownloadRun) — outcome + counts" style="endArrow=block;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="550" y="900" as="sourcePoint" />
+            <mxPoint x="1370" y="900" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m17" value="DownloadReport" style="endArrow=open;dashed=1;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="550" y="950" as="sourcePoint" />
+            <mxPoint x="390" y="950" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m18" value="table or JSON → stdout" style="endArrow=open;dashed=1;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="390" y="1000" as="sourcePoint" />
+            <mxPoint x="235" y="1000" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+        <mxCell id="m19" value="report + exit code 0 / 2" style="endArrow=open;dashed=1;html=1;fontSize=10;strokeColor=#707070;fontColor=#1A1A1A;" edge="1" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <mxPoint x="235" y="1050" as="sourcePoint" />
+            <mxPoint x="85" y="1050" as="targetPoint" />
+          </mxGeometry>
+        </mxCell>
+
+        <mxCell id="note" value="Notes: CanonicalTransactionHasher validates and normalizes each transaction (institution | externalId | amount | date | payee) and computes a SHA-256 dedup key. The hash is a permanent contract; INSERT OR IGNORE is the source of truth, so re-downloads never create duplicates. A failing plugin records a failed download run and never stops the other plugins. Payee, amount, external ID, institution, and hash values are never logged." style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8C5;strokeColor=#D6B656;fontColor=#1A1A1A;fontSize=10;align=left;spacing=8;" vertex="1" parent="1">
+          <mxGeometry x="90" y="1185" width="1270" height="70" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>
