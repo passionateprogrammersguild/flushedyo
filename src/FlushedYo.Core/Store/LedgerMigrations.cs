@@ -51,6 +51,68 @@ internal static class LedgerMigrations
             );
             CREATE INDEX ix_download_runs_plugin ON download_runs (plugin, id);
             """),
+        new(
+            3,
+            """
+            CREATE TABLE accounts (
+                id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                institution TEXT    NOT NULL,
+                account_key TEXT    NOT NULL,
+                created_at  TEXT    NOT NULL,
+                UNIQUE (institution, account_key)
+            );
+            CREATE TABLE legacy_account_assignments (
+                transaction_id INTEGER PRIMARY KEY REFERENCES transactions (id),
+                account_id     INTEGER NULL REFERENCES accounts (id)
+            );
+            INSERT INTO legacy_account_assignments (transaction_id, account_id)
+            SELECT id, NULL FROM transactions;
+            CREATE TABLE account_transactions (
+                id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id     INTEGER NOT NULL REFERENCES accounts (id),
+                dedup_hash     TEXT    NOT NULL UNIQUE,
+                legacy_hash    TEXT    NOT NULL,
+                institution    TEXT    NOT NULL,
+                source_key     TEXT    NOT NULL,
+                external_id    TEXT    NOT NULL,
+                amount         TEXT    NOT NULL,
+                date           TEXT    NOT NULL,
+                payee          TEXT    NOT NULL,
+                type           TEXT    NOT NULL,
+                cash_impact    TEXT    NOT NULL CHECK (cash_impact IN ('cash', 'non-cash', 'unknown', 'correction', 'unsupported')),
+                plugin_version TEXT    NOT NULL,
+                downloaded_at  TEXT    NOT NULL,
+                UNIQUE (account_id, source_key)
+            );
+            CREATE INDEX ix_account_transactions_account_date ON account_transactions (account_id, date, id);
+            CREATE TABLE account_imports (
+                id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id          INTEGER NOT NULL REFERENCES accounts (id),
+                plugin_version      TEXT    NOT NULL,
+                imported_at         TEXT    NOT NULL,
+                inserted            INTEGER NOT NULL CHECK (inserted >= 0),
+                skipped             INTEGER NOT NULL CHECK (skipped >= 0),
+                rejected            INTEGER NOT NULL CHECK (rejected >= 0),
+                latest_safe_date    TEXT,
+                cash_status         TEXT    NOT NULL CHECK (cash_status IN ('known', 'unknown', 'reconciliation-needed')),
+                cash_reason         TEXT    NOT NULL CHECK (cash_reason IN ('none', 'missing-baseline', 'ambiguous-transaction', 'correction', 'unsupported-activity')),
+                opening_cash_balance TEXT,
+                cash_balance        TEXT,
+                cash_difference     TEXT
+            );
+            CREATE INDEX ix_account_imports_account ON account_imports (account_id, id);
+            CREATE TABLE account_progress (
+                account_id           INTEGER PRIMARY KEY REFERENCES accounts (id),
+                last_import_id       INTEGER NOT NULL UNIQUE REFERENCES account_imports (id),
+                latest_safe_date     TEXT,
+                cash_status          TEXT    NOT NULL CHECK (cash_status IN ('known', 'unknown', 'reconciliation-needed')),
+                cash_reason          TEXT    NOT NULL CHECK (cash_reason IN ('none', 'missing-baseline', 'ambiguous-transaction', 'correction', 'unsupported-activity')),
+                opening_cash_balance TEXT,
+                cash_balance         TEXT,
+                cash_difference      TEXT,
+                updated_at           TEXT    NOT NULL
+            );
+            """),
     ];
 
     internal static int LatestVersion => All[^1].Version;

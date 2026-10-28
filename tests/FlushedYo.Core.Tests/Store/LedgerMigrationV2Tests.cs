@@ -25,7 +25,7 @@ public sealed class LedgerMigrationV2Tests
 
         await using var connection = await ledger.Database.OpenAsync(Token);
 
-        Assert.Equal(2L, await ScalarAsync(connection, "PRAGMA user_version;", Token));
+        Assert.Equal((long)LedgerMigrations.LatestVersion, await ScalarAsync(connection, "PRAGMA user_version;", Token));
         Assert.Equal(1L, await ScalarAsync(connection, "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'download_runs';", Token));
         Assert.Equal(1L, await ScalarAsync(connection, "SELECT COUNT(*) FROM transactions;", Token));
     }
