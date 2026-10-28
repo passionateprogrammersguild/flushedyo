@@ -360,7 +360,8 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
         {
             return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
         }
-        catch (SqliteException exception) when (exception.SqliteErrorCode == 19)
+        catch (SqliteException exception) when (
+            exception.SqliteErrorCode == 19 && exception.SqliteExtendedErrorCode == 2067)
         {
             if (await SourceIdentityExistsAsync(
                     connection,
