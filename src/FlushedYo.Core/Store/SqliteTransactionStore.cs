@@ -43,7 +43,9 @@ public sealed class SqliteTransactionStore(LedgerDatabase database) : ITransacti
         }
 
         await using var connection = await database.OpenAsync(cancellationToken).ConfigureAwait(false);
+        using var dbTransaction = connection.BeginTransaction(deferred: false);
         await using var command = connection.CreateCommand();
+        command.Transaction = dbTransaction;
         command.CommandText =
             """
             INSERT OR IGNORE INTO transactions
@@ -61,7 +63,23 @@ public sealed class SqliteTransactionStore(LedgerDatabase database) : ITransacti
         command.Parameters.AddWithValue("$pluginVersion", audit.PluginVersion);
         command.Parameters.AddWithValue("$downloadedAt", audit.DownloadedAt.UtcDateTime.ToString("O", CultureInfo.InvariantCulture));
 
-        return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
+        var inserted = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
+
+        await using (var assignment = connection.CreateCommand())
+        {
+            assignment.Transaction = dbTransaction;
+            assignment.CommandText =
+                """
+                INSERT OR IGNORE INTO legacy_account_assignments (transaction_id, account_id)
+                SELECT id, NULL FROM transactions WHERE canonical_hash = $hash;
+                """;
+            assignment.Parameters.AddWithValue("$hash", audit.CanonicalHash);
+            await assignment.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        }
+
+        cancellationToken.ThrowIfCancellationRequested();
+        dbTransaction.Commit();
+        return inserted;
     }
 
     /// <inheritdoc />

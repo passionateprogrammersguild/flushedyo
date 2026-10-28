@@ -95,10 +95,19 @@ internal static class LedgerMigrations
                 rejected            INTEGER NOT NULL CHECK (rejected >= 0),
                 latest_safe_date    TEXT,
                 cash_status         TEXT    NOT NULL CHECK (cash_status IN ('known', 'unknown', 'reconciliation-needed')),
-                cash_reason         TEXT    NOT NULL CHECK (cash_reason IN ('none', 'missing-baseline', 'ambiguous-transaction', 'correction', 'unsupported-activity')),
+                cash_reason         TEXT    NOT NULL CHECK (cash_reason IN ('none', 'missing-baseline', 'ambiguous-transaction', 'correction', 'unsupported-activity', 'arithmetic-overflow')),
                 opening_cash_balance TEXT,
                 cash_balance        TEXT,
-                cash_difference     TEXT
+                cash_difference     TEXT,
+                CONSTRAINT ck_account_imports_cash_state CHECK (
+                    (cash_status = 'known' AND cash_reason = 'none'
+                        AND opening_cash_balance IS NOT NULL AND cash_balance IS NOT NULL AND cash_difference IS NOT NULL)
+                    OR (cash_status = 'unknown' AND cash_reason = 'missing-baseline'
+                        AND opening_cash_balance IS NULL AND cash_balance IS NULL AND cash_difference IS NULL)
+                    OR (cash_status = 'reconciliation-needed'
+                        AND cash_reason IN ('ambiguous-transaction', 'correction', 'unsupported-activity', 'arithmetic-overflow')
+                        AND opening_cash_balance IS NULL AND cash_balance IS NULL AND cash_difference IS NULL)
+                )
             );
             CREATE INDEX ix_account_imports_account ON account_imports (account_id, id);
             CREATE TABLE account_progress (
@@ -106,11 +115,20 @@ internal static class LedgerMigrations
                 last_import_id       INTEGER NOT NULL UNIQUE REFERENCES account_imports (id),
                 latest_safe_date     TEXT,
                 cash_status          TEXT    NOT NULL CHECK (cash_status IN ('known', 'unknown', 'reconciliation-needed')),
-                cash_reason          TEXT    NOT NULL CHECK (cash_reason IN ('none', 'missing-baseline', 'ambiguous-transaction', 'correction', 'unsupported-activity')),
+                cash_reason          TEXT    NOT NULL CHECK (cash_reason IN ('none', 'missing-baseline', 'ambiguous-transaction', 'correction', 'unsupported-activity', 'arithmetic-overflow')),
                 opening_cash_balance TEXT,
                 cash_balance         TEXT,
                 cash_difference      TEXT,
-                updated_at           TEXT    NOT NULL
+                updated_at           TEXT    NOT NULL,
+                CONSTRAINT ck_account_progress_cash_state CHECK (
+                    (cash_status = 'known' AND cash_reason = 'none'
+                        AND opening_cash_balance IS NOT NULL AND cash_balance IS NOT NULL AND cash_difference IS NOT NULL)
+                    OR (cash_status = 'unknown' AND cash_reason = 'missing-baseline'
+                        AND opening_cash_balance IS NULL AND cash_balance IS NULL AND cash_difference IS NULL)
+                    OR (cash_status = 'reconciliation-needed'
+                        AND cash_reason IN ('ambiguous-transaction', 'correction', 'unsupported-activity', 'arithmetic-overflow')
+                        AND opening_cash_balance IS NULL AND cash_balance IS NULL AND cash_difference IS NULL)
+                )
             );
             """),
     ];

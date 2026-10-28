@@ -22,6 +22,17 @@ public interface IAccountLedgerStore
     /// </exception>
     Task<AccountImportResult> ImportAsync(AccountImport import, CancellationToken cancellationToken = default);
 
+    /// <summary>Returns one account's completed imports in insertion order.</summary>
+    /// <param name="account">Institution-scoped account identity.</param>
+    /// <param name="cancellationToken">Token that cancels the query.</param>
+    /// <returns>
+    /// Only history belonging to <paramref name="account"/>. Each entry contains the counts, inclusive
+    /// safe-date watermark, and cash-only state persisted atomically with that import.
+    /// </returns>
+    Task<IReadOnlyList<AccountImportRecord>> GetImportHistoryAsync(
+        Account account,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Returns one account's transactions in insertion order.</summary>
     /// <param name="account">Institution-scoped account identity.</param>
     /// <param name="cancellationToken">Token that cancels the query.</param>

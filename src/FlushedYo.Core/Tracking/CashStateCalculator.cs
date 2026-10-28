@@ -18,7 +18,8 @@ public static class CashStateCalculator
     /// <returns>
     /// A known cash state only when all inputs are explicit. Missing baselines produce an unknown state;
     /// rejected, ambiguous, correction, and unsupported activity produce reconciliation-needed states.
-    /// Unknown states never contain fabricated balances or differences.
+    /// Decimal overflow also produces a reconciliation-needed state. Unknown and reconciliation-needed
+    /// states never contain fabricated balances or differences.
     /// </returns>
     public static CashState Calculate(
         decimal? openingCashBalance,
@@ -33,41 +34,48 @@ public static class CashStateCalculator
         }
 
         decimal movement = 0m;
-        foreach (var accountTransaction in newlyInsertedTransactions)
+        try
         {
-            ArgumentNullException.ThrowIfNull(accountTransaction);
-
-            switch (accountTransaction.CashImpact)
+            foreach (var accountTransaction in newlyInsertedTransactions)
             {
-                case CashImpact.CashAffecting:
-                    movement = checked(movement + accountTransaction.Transaction.Amount);
-                    break;
-                case CashImpact.NotCashAffecting:
-                    break;
-                case CashImpact.Unknown:
-                    return ReconciliationNeeded(CashStateReason.AmbiguousTransaction);
-                case CashImpact.Correction:
-                    return ReconciliationNeeded(CashStateReason.Correction);
-                case CashImpact.Unsupported:
-                    return ReconciliationNeeded(CashStateReason.UnsupportedActivity);
-                default:
-                    return ReconciliationNeeded(CashStateReason.AmbiguousTransaction);
+                ArgumentNullException.ThrowIfNull(accountTransaction);
+
+                switch (accountTransaction.CashImpact)
+                {
+                    case CashImpact.CashAffecting:
+                        movement = checked(movement + accountTransaction.Transaction.Amount);
+                        break;
+                    case CashImpact.NotCashAffecting:
+                        break;
+                    case CashImpact.Unknown:
+                        return ReconciliationNeeded(CashStateReason.AmbiguousTransaction);
+                    case CashImpact.Correction:
+                        return ReconciliationNeeded(CashStateReason.Correction);
+                    case CashImpact.Unsupported:
+                        return ReconciliationNeeded(CashStateReason.UnsupportedActivity);
+                    default:
+                        return ReconciliationNeeded(CashStateReason.AmbiguousTransaction);
+                }
             }
-        }
 
-        if (openingCashBalance is null)
+            if (openingCashBalance is null)
+            {
+                return new CashState(
+                    CashStateStatus.Unknown,
+                    CashStateReason.MissingBaseline,
+                    OpeningCashBalance: null,
+                    CashBalance: null,
+                    Difference: null);
+            }
+
+            var opening = openingCashBalance.Value;
+            var balance = checked(opening + movement);
+            return new CashState(CashStateStatus.Known, CashStateReason.None, opening, balance, movement);
+        }
+        catch (OverflowException)
         {
-            return new CashState(
-                CashStateStatus.Unknown,
-                CashStateReason.MissingBaseline,
-                OpeningCashBalance: null,
-                CashBalance: null,
-                Difference: null);
+            return ReconciliationNeeded(CashStateReason.ArithmeticOverflow);
         }
-
-        var opening = openingCashBalance.Value;
-        var balance = checked(opening + movement);
-        return new CashState(CashStateStatus.Known, CashStateReason.None, opening, balance, movement);
     }
 
     private static CashState ReconciliationNeeded(CashStateReason reason) =>

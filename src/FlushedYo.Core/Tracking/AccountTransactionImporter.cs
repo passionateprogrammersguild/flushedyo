@@ -19,7 +19,8 @@ public sealed partial class AccountTransactionImporter(
     /// <param name="pluginVersion">Version of the plugin that supplied the batch.</param>
     /// <param name="openingCashBalance">
     /// Optional opening cash baseline. When omitted, a previously known cash balance is used; the first
-    /// import without either baseline remains explicitly unknown.
+    /// import without either baseline remains explicitly unknown. A supplied baseline is authoritative,
+    /// including for duplicate-only imports used to resynchronize cash progress.
     /// </param>
     /// <param name="cancellationToken">Token that cancels enumeration or persistence.</param>
     /// <returns>The atomically persisted import result.</returns>
@@ -43,6 +44,7 @@ public sealed partial class AccountTransactionImporter(
             throw new ArgumentException(accountError, nameof(account));
         }
 
+        var normalizedAccount = AccountTransactionHasher.NormalizeAccount(account);
         var valid = new List<AccountTransaction>();
         var rejected = 0;
         var index = -1;
@@ -65,7 +67,6 @@ public sealed partial class AccountTransactionImporter(
                 continue;
             }
 
-            var normalizedAccount = AccountTransactionHasher.NormalizeAccount(account);
             var itemAccount = AccountTransactionHasher.NormalizeAccount(transaction.Account);
             if (!string.Equals(normalizedAccount.Institution, itemAccount.Institution, StringComparison.Ordinal) ||
                 !string.Equals(normalizedAccount.AccountKey, itemAccount.AccountKey, StringComparison.Ordinal))

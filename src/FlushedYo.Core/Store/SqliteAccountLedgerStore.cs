@@ -78,6 +78,49 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
     }
 
     /// <inheritdoc />
+    public async Task<IReadOnlyList<AccountImportRecord>> GetImportHistoryAsync(
+        Account account,
+        CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var normalized = AccountTransactionHasher.NormalizeAccount(account);
+
+        await using var connection = await database.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT i.plugin_version, i.imported_at, i.inserted, i.skipped, i.rejected, i.latest_safe_date,
+                   i.cash_status, i.cash_reason, i.opening_cash_balance, i.cash_balance, i.cash_difference
+            FROM account_imports AS i
+            INNER JOIN accounts AS a ON a.id = i.account_id
+            WHERE a.institution = $institution AND a.account_key = $accountKey
+            ORDER BY i.id;
+            """;
+        command.Parameters.AddWithValue("$institution", normalized.Institution);
+        command.Parameters.AddWithValue("$accountKey", normalized.AccountKey);
+
+        var history = new List<AccountImportRecord>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            history.Add(new AccountImportRecord
+            {
+                PluginVersion = reader.GetString(0),
+                ImportedAt = DateTimeOffset.Parse(reader.GetString(1), CultureInfo.InvariantCulture),
+                Inserted = reader.GetInt32(2),
+                Skipped = reader.GetInt32(3),
+                Rejected = reader.GetInt32(4),
+                LatestSafeDate = reader.IsDBNull(5)
+                    ? null
+                    : DateOnly.ParseExact(reader.GetString(5), DateFormat, CultureInfo.InvariantCulture),
+                CashState = ReadCashState(reader, statusColumn: 6),
+            });
+        }
+
+        return history;
+    }
+
+    /// <inheritdoc />
     public async Task<IReadOnlyList<AccountTransaction>> GetTransactionsAsync(
         Account account,
         CancellationToken cancellationToken = default)
@@ -319,8 +362,34 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
         }
         catch (SqliteException exception) when (exception.SqliteErrorCode == 19)
         {
-            throw new LedgerException(AmbiguousSourceMessage, exception);
+            if (await SourceIdentityExistsAsync(
+                    connection,
+                    transaction,
+                    accountId,
+                    item.Value.Transaction.ExternalId.Trim(),
+                    cancellationToken).ConfigureAwait(false))
+            {
+                throw new LedgerException(AmbiguousSourceMessage, exception);
+            }
+
+            throw;
         }
+    }
+
+    private static async Task<bool> SourceIdentityExistsAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long accountId,
+        string sourceKey,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText =
+            "SELECT 1 FROM account_transactions WHERE account_id = $accountId AND source_key = $sourceKey LIMIT 1;";
+        command.Parameters.AddWithValue("$accountId", accountId);
+        command.Parameters.AddWithValue("$sourceKey", sourceKey);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
     }
 
     private static async Task VerifyDuplicateAsync(
@@ -348,9 +417,9 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
         AccountProgress? previous,
         List<AccountTransaction> inserted)
     {
-        if (previous is not null && inserted.Count == 0 && import.Rejected == 0)
+        if (previous is not null && inserted.Count == 0 && import.Rejected == 0 && import.OpeningCashBalance is null)
         {
-            // Replaying an old baseline with no new rows must not rewind or double-apply progress.
+            // A duplicate-only import without a new baseline cannot advance or double-apply progress.
             return previous.CashState;
         }
 
@@ -538,6 +607,7 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
         CashStateReason.AmbiguousTransaction => "ambiguous-transaction",
         CashStateReason.Correction => "correction",
         CashStateReason.UnsupportedActivity => "unsupported-activity",
+        CashStateReason.ArithmeticOverflow => "arithmetic-overflow",
         _ => throw new ArgumentOutOfRangeException(nameof(value)),
     };
 
@@ -548,6 +618,7 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
         "ambiguous-transaction" => CashStateReason.AmbiguousTransaction,
         "correction" => CashStateReason.Correction,
         "unsupported-activity" => CashStateReason.UnsupportedActivity,
+        "arithmetic-overflow" => CashStateReason.ArithmeticOverflow,
         _ => throw new LedgerException("The ledger contains an unknown cash-state reason."),
     };
 

@@ -30,6 +30,9 @@ public enum CashStateReason
 
     /// <summary>Unsupported activity requires explicit reconciliation.</summary>
     UnsupportedActivity,
+
+    /// <summary>Cash arithmetic exceeded the supported <see cref="decimal"/> range.</summary>
+    ArithmeticOverflow,
 }
 
 /// <summary>
