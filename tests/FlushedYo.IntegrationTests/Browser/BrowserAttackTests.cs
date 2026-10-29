@@ -90,8 +90,54 @@ public sealed class BrowserAttackTests
         await bridge.NavigateAsync(site.Url("/popup-attack"), Token);
         var expected = await bridge.GetSecuritySnapshotAsync(Token);
 
+        var exception = await Assert.ThrowsAnyAsync<BridgeException>(() =>
+            bridge.EnterCredentialAsync("synthetic/password", "#secret", expected, Token));
+
+        Assert.Contains("additional page target", exception.Message, StringComparison.Ordinal);
+        await AssertFaulted(bridge);
+    }
+
+    [Fact]
+    public async Task TargetFloodDuringEntry_FaultsAndTearsDownWithoutHanging()
+    {
+        BrowserTestEnvironment.RequireChromium();
+        await using var site = new SyntheticSite();
+        site.MapHtml("/flood", """
+            <!doctype html><input id="secret" type="password"
+              oninput="for (let i = 0; i < 40; i++) { window.open('/popup', '_blank'); }">
+            """);
+        site.MapHtml("/popup", "<!doctype html>Injected target");
+        await using var bridge = site.CreateBridge();
+        await bridge.NavigateAsync(site.Url("/flood"), Token);
+        var expected = await bridge.GetSecuritySnapshotAsync(Token);
+
         await Assert.ThrowsAnyAsync<BridgeException>(() =>
             bridge.EnterCredentialAsync("synthetic/password", "#secret", expected, Token));
+
+        await AssertFaulted(bridge);
+    }
+
+    [Fact]
+    public async Task FormActionRetargetedToAnotherAllowedOrigin_NeverDeliversTheSecret()
+    {
+        BrowserTestEnvironment.RequireChromium();
+        await using var site = new SyntheticSite();
+        site.MapHtml("/retarget", $$"""
+            <!doctype html><title>Retarget</title>
+            <form id="login" method="post" action="http://localhost:{{site.Port}}/submit">
+              <input id="secret" name="secret" type="password">
+            </form>
+            """);
+        site.MapHtml("/submit", "<!doctype html><title>received</title>");
+        await using var bridge = site.CreateBridge();
+        await bridge.NavigateAsync(site.Url("/retarget"), Token);
+        var snapshot = await bridge.GetSecuritySnapshotAsync(Token);
+
+        await Assert.ThrowsAnyAsync<BridgeException>(() =>
+            bridge.SubmitCredentialAsync("synthetic/password", "#secret", snapshot, Token));
+
+        Assert.False(site.RequestCounts.ContainsKey("/submit"));
+        Assert.Empty(site.FormSecrets);
         await AssertFaulted(bridge);
     }
 

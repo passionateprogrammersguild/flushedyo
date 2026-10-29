@@ -147,6 +147,7 @@ internal sealed class SyntheticSite : IAsyncDisposable
             TeardownTimeout = TimeSpan.FromSeconds(15),
             MaxMfaTimeout = TimeSpan.FromSeconds(3),
             BrowserExecutablePath = BrowserTestEnvironment.RequireChromium(),
+            AllowBrowserExecutableOverride = true,
         },
         new InMemorySecretStore(new Dictionary<string, string>
         {

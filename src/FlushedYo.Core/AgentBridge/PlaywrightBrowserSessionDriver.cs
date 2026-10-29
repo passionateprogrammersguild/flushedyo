@@ -16,12 +16,16 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
     private readonly CancellationTokenSource _forceClose = new();
     private readonly object _abandonedTasksLock = new();
     private readonly List<Task> _abandonedTasks = [];
+    // Only the first extra target matters: it already faults the session, so a small bound is enough and
+    // a page that floods targets cannot grow this queue (TryWrite fails when full, which faults).
     private readonly Channel<BrowserEventCommand> _browserEvents =
-        Channel.CreateUnbounded<BrowserEventCommand>(new UnboundedChannelOptions
+        Channel.CreateBounded<BrowserEventCommand>(new BoundedChannelOptions(8)
         {
             SingleReader = true,
             SingleWriter = false,
+            FullMode = BoundedChannelFullMode.Wait,
         });
+    private readonly object _faultLock = new();
 
     private IPlaywright? _playwright;
     private IBrowser? _browser;
@@ -37,6 +41,7 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
     private int _started;
     private int _closed;
     private int _disposed;
+    private volatile string? _submitOriginPin;
     private volatile bool _closeFailed;
     private volatile string _faultReason = "browser state";
 
@@ -72,31 +77,11 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
             cancellationToken.ThrowIfCancellationRequested();
 
             _browser = await AwaitBrowserTaskAsync(
-                _playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions
-                {
-                    Headless = _options.Headless,
-                    ExecutablePath = _options.BrowserExecutablePath,
-                    ChromiumSandbox = true,
-                    Env = CreateBrowserEnvironment(),
-                    Timeout = Milliseconds(_options.ActionTimeout),
-                    Args =
-                    [
-                        "--disable-background-networking",
-                        "--disable-component-update",
-                        "--disable-default-apps",
-                        "--disable-extensions",
-                        "--disable-sync",
-                        "--no-first-run",
-                    ],
-                }),
+                _playwright.Chromium.LaunchAsync(BuildLaunchOptions(_options)),
                 cancellationToken).ConfigureAwait(false);
 
             _context = await AwaitBrowserTaskAsync(
-                _browser.NewContextAsync(new BrowserNewContextOptions
-                {
-                    AcceptDownloads = false,
-                    ServiceWorkers = ServiceWorkerPolicy.Block,
-                }),
+                _browser.NewContextAsync(BuildContextOptions()),
                 cancellationToken).ConfigureAwait(false);
 
             _page = await AwaitBrowserTaskAsync(_context.NewPageAsync(), cancellationToken).ConfigureAwait(false);
@@ -132,7 +117,7 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
             }
 
             throw new BridgeOperationException(
-                "Chromium could not be started safely. Install the Playwright Chromium browser or configure AgentBridge:BrowserExecutablePath.");
+                "Chromium could not be started safely. Install the Playwright Chromium browser or configure AgentBridge:BrowserExecutablePath with AllowBrowserExecutableOverride.");
         }
     }
 
@@ -237,8 +222,12 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
                 // Submission is the one document navigation the bridge itself initiates. Disallowed
                 // destinations are still aborted by the route policy, and the post-submit check
                 // requires the same target and frame at an allowed origin.
+                // While the submission is in flight only the verified origin may receive the document
+                // request, so a retargeted form action cannot deliver the secret to a second allowed origin.
+                _submitOriginPin = (await GetSecuritySnapshotAsync(cancellationToken).ConfigureAwait(false)).Origin;
                 Interlocked.Exchange(ref _freezeDocumentNavigations, 0);
                 await AwaitBrowserTaskAsync(element.PressAsync("Enter"), cancellationToken).ConfigureAwait(false);
+                _submitOriginPin = null;
                 operationStep = "post-submit verification";
                 await verifyAfterSubmit(cancellationToken).ConfigureAwait(false);
             }
@@ -256,10 +245,11 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         catch (Exception)
         {
             Fault("browser state");
-            throw new BridgeOperationException($"The credential {operationStep} failed safely.");
+            throw new BridgeOperationException($"The credential {operationStep} failed safely ({_faultReason}).");
         }
         finally
         {
+            _submitOriginPin = null;
             if (element is not null)
             {
                 try
@@ -391,7 +381,10 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
             var frozen = isDocument && Volatile.Read(ref _freezeDocumentNavigations) != 0;
             var disallowed = isDocument &&
                              (!Uri.TryCreate(request.Url, UriKind.Absolute, out var requestUrl) || !_policy.IsAllowed(requestUrl));
-            if (frozen || disallowed)
+            var pin = _submitOriginPin;
+            var offPin = isDocument && pin is not null && !disallowed &&
+                         !string.Equals(_policy.GetOrigin(new Uri(request.Url)), pin, StringComparison.Ordinal);
+            if (frozen || disallowed || offPin)
             {
                 Fault("blocked document request");
                 await route.AbortAsync("BlockedByClient").ConfigureAwait(false);
@@ -649,8 +642,15 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
 
     private void Fault(string reason)
     {
-        _faultReason = reason;
-        Interlocked.Exchange(ref _faulted, 1);
+        lock (_faultLock)
+        {
+            if (Volatile.Read(ref _faulted) == 0)
+            {
+                _faultReason = reason;
+                Volatile.Write(ref _faulted, 1);
+            }
+        }
+
         ChangeSecurityState();
     }
 
@@ -669,7 +669,31 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
 
     private static float Milliseconds(TimeSpan timeout) => (float)timeout.TotalMilliseconds;
 
-    private static Dictionary<string, string> CreateBrowserEnvironment()
+    internal static BrowserTypeLaunchOptions BuildLaunchOptions(AgentBridgeOptions options) => new()
+    {
+        Headless = options.Headless,
+        ExecutablePath = options.BrowserExecutablePath,
+        ChromiumSandbox = true,
+        Env = CreateBrowserEnvironment(),
+        Timeout = Milliseconds(options.ActionTimeout),
+        Args =
+        [
+            "--disable-background-networking",
+            "--disable-component-update",
+            "--disable-default-apps",
+            "--disable-extensions",
+            "--disable-sync",
+            "--no-first-run",
+        ],
+    };
+
+    internal static BrowserNewContextOptions BuildContextOptions() => new()
+    {
+        AcceptDownloads = false,
+        ServiceWorkers = ServiceWorkerPolicy.Block,
+    };
+
+    internal static Dictionary<string, string> CreateBrowserEnvironment()
     {
         var environment = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var name in new[]

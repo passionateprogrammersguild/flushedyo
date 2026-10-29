@@ -24,14 +24,29 @@ public sealed class AgentBridgeOptions
     /// <summary>Gets the longest timeout a caller may request for a manual MFA pause.</summary>
     public TimeSpan MaxMfaTimeout { get; init; } = TimeSpan.FromMinutes(5);
 
-    /// <summary>Gets an optional Chromium executable path, primarily for controlled test environments.</summary>
+    /// <summary>
+    /// Gets an optional Chromium executable path. The executable receives website credentials, so it is
+    /// honoured only when <see cref="AllowBrowserExecutableOverride"/> is also set.
+    /// </summary>
     public string? BrowserExecutablePath { get; init; }
+
+    /// <summary>
+    /// Gets a value indicating whether <see cref="BrowserExecutablePath"/> may replace the Playwright-managed
+    /// Chromium. Defaults to <see langword="false"/>; enable only in controlled environments.
+    /// </summary>
+    public bool AllowBrowserExecutableOverride { get; init; }
 
     internal void Validate()
     {
         if (AllowedOrigins is null)
         {
             throw new BridgeOperationException("The browser origin allowlist is not configured.");
+        }
+
+        if (!string.IsNullOrWhiteSpace(BrowserExecutablePath) && !AllowBrowserExecutableOverride)
+        {
+            throw new BridgeOperationException(
+                "A custom browser executable is configured but the override is not enabled.");
         }
 
         ValidatePositive(NavigationTimeout, "navigation timeout");
