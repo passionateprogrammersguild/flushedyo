@@ -9,10 +9,10 @@ Implemented and verified locally. An independent security review ran (see "Secur
 | Check | Result |
 |---|---|
 | `dotnet build flushedyo.slnx` | 0 warnings, 0 errors |
-| `tests/FlushedYo.Core.Tests` | 506 total, 505 passed, 1 skipped (case-sensitive filesystem skip, pre-existing) |
+| `tests/FlushedYo.Core.Tests` | 513 total, 512 passed, 1 skipped (case-sensitive filesystem skip, pre-existing) |
 | `tests/FlushedYo.ArchitectureTests` | 15 passed |
-| `tests/FlushedYo.IntegrationTests --filter "Category!=Live&Category!=Network"` | 111 passed, 0 failed, 0 skipped |
-| Real-browser suite (`Browser/`, 13 tests, one serial `RealBrowser` collection) | 13 passed, 0 skipped |
+| `tests/FlushedYo.IntegrationTests --filter "Category!=Live&Category!=Network"` | 113 passed, 0 failed, 0 skipped |
+| Real-browser suite (`Browser/`, 15 tests, one serial `RealBrowser` collection) | 15 passed, 0 skipped |
 | `dotnet format flushedyo.slnx --verify-no-changes` | exit 0 |
 | Live and Network categories | not run (need vault / `npx`; unrelated to this unit) |
 
@@ -63,16 +63,17 @@ No blockers. Both prior rejection reasons confirmed fixed: no page-derived text 
 | 2 | minor | Post-submit check accepted any allow-listed origin, not the original | Fixed: must equal the pre-submit origin. A deliberate cross-origin post-login hop needs a future explicit parameter. Test: `NavigationToDifferentAllowedOriginAfterSubmit_FaultsAndClosesSession`. |
 | 3 | minor | `DEBUG=pw:api` / `PWDEBUG` could log the filled secret | Fixed: `StartAsync` rejects `PWDEBUG`, `DEBUG` containing `pw:` or `*`. Test: `PlaywrightDebugLogging_IsRejectedBeforeAnyBrowserStarts` (in the serial `RealBrowser` collection because it mutates a process-wide variable that only Playwright users read). |
 | 6 | minor | `_closeFailed` / `_faultReason` non-volatile | Fixed: both volatile. |
-| 4 | minor | `BrowserExecutablePath` executed unvalidated | OPEN: needs an opt-in flag; same trust level as config control. |
-| 5 | minor | Unbounded browser-event channel (page-driven memory growth before fault) | OPEN: use a bounded channel; session is already faulted after the first extra target. |
-| 7a | minor (test) | Popup test could pass for the wrong reason (asserts only some `BridgeException` + faulted) | OPEN: assert the fault category or that the popup target appeared. |
-| 7b | minor (test) | No structural test that launch/context options keep sandbox, no downloads, service workers blocked, no HAR/video/tracing | OPEN: regression-prone gap. |
-| 7c | minor (test) | Missing: submit to a second allow-listed origin via form action in a real browser; `beforeunload` during submit; disposal racing a submit | PARTIAL: second-origin covered hermetically only. |
+| 4 | minor | `BrowserExecutablePath` executed unvalidated | Fixed: new `AllowBrowserExecutableOverride` (default false); `AgentBridgeOptions.Validate()` (run by the bridge constructor) rejects a configured path without it, without echoing the path. Tests: `AgentBridgeOptionsTests` (4). Real-browser test site opts in explicitly. |
+| 5 | minor | Unbounded browser-event channel | Fixed: bounded channel (capacity 8, `Wait`); a failed `TryWrite` faults the session. Test: `TargetFloodDuringEntry_FaultsAndTearsDownWithoutHanging` (40 `window.open` calls). |
+| 7a | minor (test) | Popup test could pass for the wrong reason | Fixed: `Fault()` is now first-fault-wins and the driver's entry error includes the recorded value-free fault category; the test asserts `additional page target`. (Asserting that the popup reached the server was tried and rejected: the session closes the target before it issues a request, which is the safe behaviour.) |
+| 7b | minor (test) | No structural test of launch/context hardening | Fixed: launch and context options are built by `BuildLaunchOptions` / `BuildContextOptions` and asserted in `PlaywrightLaunchHardeningTests` (sandbox on; no `--no-sandbox`, remote-debugging, `disable-web-security`, `user-data-dir`; no downloads/traces/proxy; service workers blocked; no HAR, video, storage state, permissions, client certificates; browser env carries no `BW_SESSION`, `DEBUG`, `PWDEBUG`). |
+| 7c | minor (test) | Missing negatives: form action to a second allowed origin; `beforeunload` during submit; disposal racing a submit | PARTIAL. Second origin: the review exposed a real gap (the secret could be POSTed to a second allow-listed origin before the post-submit check noticed). Fixed in production: while a submit is in flight, document requests are pinned to the verified origin and anything else is aborted and faults. Test: `FormActionRetargetedToAnotherAllowedOrigin_NeverDeliversTheSecret` (no request reaches the other origin, no secret stored). STILL OPEN: `beforeunload` during submit and disposal racing a submit have no dedicated test. |
 
 The reviewer did not read `ManualMfaBrowserTests.cs`, the hermetic test files, or the csproj/props diff, and did not run anything; those remain covered only by the implementor's runs above.
 
 ## Not done
 
-- Performance and systemic review panels; fixing or explicitly accepting the OPEN security minors above.
+- Performance and systemic review panels.
+- Dedicated tests for `beforeunload` during submit and for disposal racing a submit (the only remaining open review items).
 - Merge, and later cleanup of the frozen 002/006 worktrees.
 - Repeated-run stability check of the browser suite beyond the passes recorded above.
