@@ -2,6 +2,7 @@ using FlushedYo.Core.Models;
 using FlushedYo.Core.Store;
 using Microsoft.Data.Sqlite;
 using static FlushedYo.Core.Tests.Store.AccountLedgerTestData;
+using static FlushedYo.Core.Tests.Store.SqliteErrorCodes;
 
 namespace FlushedYo.Core.Tests.Store;
 
@@ -69,8 +70,38 @@ public sealed class SqliteAccountLedgerStoreCollisionTests
         var exception = await Assert.ThrowsAsync<SqliteException>(() =>
             store.ImportAsync(Import(account, [second]), Token));
 
-        Assert.Equal(19, exception.SqliteErrorCode);
-        Assert.Equal(2067, exception.SqliteExtendedErrorCode);
+        Assert.Equal(Constraint, exception.SqliteErrorCode);
+        Assert.Equal(ConstraintUnique, exception.SqliteExtendedErrorCode);
+        Assert.Single(await store.GetTransactionsAsync(account, Token));
+        Assert.Single(await store.GetImportHistoryAsync(account, Token));
+    }
+
+    /// <summary>
+    /// Rows with other source keys already committed must not turn an unrelated UNIQUE violation (
+    /// failing insert's own source key has no row) into an ambiguous-source report, and the import rolls back.
+    /// </summary>
+    [Fact]
+    public async Task UnrelatedUniqueConstraint_WithPersistedOtherSources_IsNotAmbiguousAndRollsBack()
+    {
+        using var ledger = new TempLedger();
+        var store = CreateStore(ledger);
+        var account = Account();
+        await store.ImportAsync(Import(account, [AccountTx(account: account, externalId: "first")]), Token);
+        await using (var connection = await ledger.Database.OpenAsync(Token))
+        {
+            await using var command = connection.CreateCommand();
+            command.CommandText =
+                "CREATE UNIQUE INDEX test_unique_plugin_version ON account_transactions (plugin_version);";
+            await command.ExecuteNonQueryAsync(Token);
+        }
+
+        var fresh = AccountTx(account: account, externalId: "fresh", amount: 7m);
+        var second = AccountTx(account: account, externalId: "second", amount: 99m);
+        var exception = await Assert.ThrowsAsync<SqliteException>(() =>
+            store.ImportAsync(Import(account, [fresh, second]), Token));
+
+        Assert.Equal(Constraint, exception.SqliteErrorCode);
+        Assert.Equal(ConstraintUnique, exception.SqliteExtendedErrorCode);
         Assert.Single(await store.GetTransactionsAsync(account, Token));
         Assert.Single(await store.GetImportHistoryAsync(account, Token));
     }
@@ -101,8 +132,8 @@ public sealed class SqliteAccountLedgerStoreCollisionTests
         var exception = await Assert.ThrowsAsync<SqliteException>(() =>
             store.ImportAsync(Import(account, [changed]), Token));
 
-        Assert.Equal(19, exception.SqliteErrorCode);
-        Assert.Equal(1811, exception.SqliteExtendedErrorCode);
+        // The trigger's extended code is incidental; only the primary constraint code is contractual.
+        Assert.Equal(Constraint, exception.SqliteErrorCode);
         Assert.Equal([original], await store.GetTransactionsAsync(account, Token));
         Assert.Single(await store.GetImportHistoryAsync(account, Token));
     }

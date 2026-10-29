@@ -204,6 +204,81 @@ public sealed class SqliteAccountLedgerStoreTests
     }
 
     [Fact]
+    public async Task BoundedImportHistory_ReturnsNewestRecordsInInsertionOrderAndHonorsLimit()
+    {
+        using var ledger = new TempLedger();
+        var store = CreateStore(ledger);
+        var account = Account();
+        for (var index = 1; index <= 3; index++)
+        {
+            await store.ImportAsync(
+                Import(
+                    account,
+                    [],
+                    importedAt: new DateTimeOffset(2026, 1, index, 0, 0, 0, TimeSpan.Zero)) with
+                {
+                    PluginVersion = $"{index}.0.0",
+                },
+                Token);
+        }
+
+        await store.ImportAsync(
+            Import(Account(accountKey: "other"), []) with { PluginVersion = "9.0.0" },
+            Token);
+
+        var recent = await store.GetImportHistoryAsync(account, 2, Token);
+
+        Assert.Equal(2, recent.Count);
+        Assert.Equal(["2.0.0", "3.0.0"], recent.Select(static record => record.PluginVersion).ToArray());
+        Assert.Equal("3.0.0", Assert.Single(await store.GetImportHistoryAsync(account, 1, Token)).PluginVersion);
+        Assert.Equal(3, (await store.GetImportHistoryAsync(account, 10, Token)).Count);
+        Assert.Equal(3, (await store.GetImportHistoryAsync(account, Token)).Count);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    public async Task BoundedImportHistory_NonPositiveLimit_Throws(int maximumRecords)
+    {
+        using var ledger = new TempLedger();
+        var store = CreateStore(ledger);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(() =>
+            store.GetImportHistoryAsync(Account(), maximumRecords, Token));
+    }
+
+    [Fact]
+    public async Task RejectedCorrectionWithBaseline_ThenCleanBaselineImport_UsesPrecedenceAndResynchronizes()
+    {
+        using var ledger = new TempLedger();
+        var store = CreateStore(ledger);
+        var account = Account();
+        var correction = AccountTx(
+            account: account,
+            externalId: "correction",
+            date: new DateOnly(2026, 1, 2),
+            cashImpact: CashImpact.Correction);
+        var cash = AccountTx(account: account, externalId: "cash", amount: 10m);
+
+        var rejected = await store.ImportAsync(
+            Import(account, [correction, cash], openingCashBalance: 500m, rejected: 1),
+            Token);
+
+        Assert.Equal(
+            new CashState(CashStateStatus.ReconciliationNeeded, CashStateReason.AmbiguousTransaction, null, null, null),
+            rejected.CashState);
+        Assert.Null(rejected.LatestSafeDate);
+        Assert.Equal(2, (await store.GetTransactionsAsync(account, Token)).Count);
+
+        var recovered = await store.ImportAsync(Import(account, [], openingCashBalance: 600m), Token);
+
+        Assert.Equal(new CashState(CashStateStatus.Known, CashStateReason.None, 600m, 600m, 0m), recovered.CashState);
+        Assert.Null(recovered.LatestSafeDate);
+        Assert.Equal(recovered.CashState, await store.GetCashStateAsync(account, Token));
+        Assert.Equal(2, (await store.GetImportHistoryAsync(account, Token)).Count);
+    }
+
+    [Fact]
     public async Task DecimalOverflow_PersistsReconciliationNeededRatherThanThrowing()
     {
         using var ledger = new TempLedger();

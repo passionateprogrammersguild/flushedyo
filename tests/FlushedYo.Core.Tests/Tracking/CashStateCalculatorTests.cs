@@ -63,6 +63,29 @@ public sealed class CashStateCalculatorTests
     }
 
     [Fact]
+    public void RejectedRecords_TakePrecedenceOverCorrectionAndSuppliedBaseline()
+    {
+        var state = CashStateCalculator.Calculate(
+            100m,
+            [Tx(25m, CashImpact.Correction)],
+            hasRejectedTransactions: true);
+
+        Assert.Equal(
+            new CashState(CashStateStatus.ReconciliationNeeded, CashStateReason.AmbiguousTransaction, null, null, null),
+            state);
+    }
+
+    [Fact]
+    public void Correction_TakesPrecedenceOverMissingBaseline()
+    {
+        var state = CashStateCalculator.Calculate(null, [Tx(25m, CashImpact.Correction)]);
+
+        Assert.Equal(
+            new CashState(CashStateStatus.ReconciliationNeeded, CashStateReason.Correction, null, null, null),
+            state);
+    }
+
+    [Fact]
     public void MovementOverflow_ReturnsReconciliationNeededInsteadOfThrowing()
     {
         var state = CashStateCalculator.Calculate(0m, [Tx(decimal.MaxValue), Tx(1m)]);

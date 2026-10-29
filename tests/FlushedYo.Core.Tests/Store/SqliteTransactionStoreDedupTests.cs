@@ -24,6 +24,12 @@ public sealed class SqliteTransactionStoreDedupTests
         Assert.Equal(1, results.Count(static inserted => inserted));
         Assert.Equal(15, results.Count(static inserted => !inserted));
         Assert.Equal(1, await CountRowsAsync(ledger, Token));
+        Assert.Equal(
+            1L,
+            await AccountLedgerTestData.ScalarAsync(
+                ledger,
+                "SELECT COUNT(*) FROM legacy_account_assignments WHERE account_id IS NULL;",
+                Token));
     }
 
     [Fact]

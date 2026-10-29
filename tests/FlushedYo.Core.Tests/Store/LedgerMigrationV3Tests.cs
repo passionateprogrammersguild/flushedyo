@@ -1,3 +1,4 @@
+using FlushedYo.Core.Models;
 using FlushedYo.Core.Store;
 using FlushedYo.Core.Tracking;
 using Microsoft.Data.Sqlite;
@@ -26,24 +27,7 @@ public sealed class LedgerMigrationV3Tests
             }
 
             await ExecuteAsync(raw, schemaVersion == 1 ? "PRAGMA user_version = 1;" : "PRAGMA user_version = 2;");
-            await using var insert = raw.CreateCommand();
-            insert.CommandText =
-                """
-                INSERT INTO transactions
-                    (canonical_hash, institution, external_id, amount, date, payee, type, plugin_version, downloaded_at)
-                VALUES
-                    ($hash, $institution, $externalId, $amount, $date, $payee, $type, $pluginVersion, $downloadedAt);
-                """;
-            insert.Parameters.AddWithValue("$hash", legacyHash);
-            insert.Parameters.AddWithValue("$institution", legacy.Institution);
-            insert.Parameters.AddWithValue("$externalId", legacy.ExternalId);
-            insert.Parameters.AddWithValue("$amount", "5.00");
-            insert.Parameters.AddWithValue("$date", "2026-01-01");
-            insert.Parameters.AddWithValue("$payee", legacy.Payee);
-            insert.Parameters.AddWithValue("$type", legacy.Type);
-            insert.Parameters.AddWithValue("$pluginVersion", "1.0.0");
-            insert.Parameters.AddWithValue("$downloadedAt", "2026-01-01T00:00:00.0000000Z");
-            await insert.ExecuteNonQueryAsync(Token);
+            await InsertLegacyAsync(raw, legacy, legacyHash, "5.00", "2026-01-01");
         }
 
         await using var connection = await ledger.Database.OpenAsync(Token);
@@ -67,6 +51,57 @@ public sealed class LedgerMigrationV3Tests
         Assert.Equal(legacy.Type, reader.GetString(6));
         Assert.True(reader.IsDBNull(7));
         Assert.Equal(legacyHash, CanonicalTransactionHasher.ComputeHash(legacy));
+    }
+
+    [Fact]
+    public async Task VersionOneDatabaseWithMultipleLegacyRows_UpgradePreservesEveryRowAndUnassignedAssignment()
+    {
+        using var ledger = new TempLedger();
+        var rows = new[]
+        {
+            (Transaction: Tx(externalId: "legacy-1", amount: 5m, date: new DateOnly(2026, 1, 1), payee: "First"), Amount: "5.00", Date: "2026-01-01"),
+            (Transaction: Tx(externalId: "legacy-2", amount: -7.25m, date: new DateOnly(2025, 12, 31), payee: "Second"), Amount: "-7.250", Date: "2025-12-31"),
+            (Transaction: Tx(externalId: "legacy-3", amount: 0.005m, date: new DateOnly(2026, 2, 28), payee: "Third"), Amount: "0.0050", Date: "2026-02-28"),
+        };
+        await using (var raw = ledger.OpenRawConnection())
+        {
+            await ExecuteAsync(raw, LedgerMigrations.All[0].Sql);
+            await ExecuteAsync(raw, "PRAGMA user_version = 1;");
+            foreach (var row in rows)
+            {
+                await InsertLegacyAsync(
+                    raw,
+                    row.Transaction,
+                    CanonicalTransactionHasher.ComputeHash(row.Transaction),
+                    row.Amount,
+                    row.Date);
+            }
+        }
+
+        await using var connection = await ledger.Database.OpenAsync(Token);
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT t.canonical_hash, t.institution, t.external_id, t.amount, t.date, t.payee, t.type, a.account_id
+            FROM transactions AS t
+            INNER JOIN legacy_account_assignments AS a ON a.transaction_id = t.id
+            ORDER BY t.id;
+            """;
+        await using var reader = await command.ExecuteReaderAsync(Token);
+        foreach (var row in rows)
+        {
+            Assert.True(await reader.ReadAsync(Token));
+            Assert.Equal(CanonicalTransactionHasher.ComputeHash(row.Transaction), reader.GetString(0));
+            Assert.Equal(row.Transaction.Institution, reader.GetString(1));
+            Assert.Equal(row.Transaction.ExternalId, reader.GetString(2));
+            Assert.Equal(row.Amount, reader.GetString(3));
+            Assert.Equal(row.Date, reader.GetString(4));
+            Assert.Equal(row.Transaction.Payee, reader.GetString(5));
+            Assert.Equal(row.Transaction.Type, reader.GetString(6));
+            Assert.True(reader.IsDBNull(7));
+        }
+
+        Assert.False(await reader.ReadAsync(Token));
     }
 
     [Fact]
@@ -125,6 +160,33 @@ public sealed class LedgerMigrationV3Tests
         Assert.Equal(
             ["id", "canonical_hash", "institution", "external_id", "amount", "date", "payee", "type", "plugin_version", "downloaded_at"],
             columns);
+    }
+
+    private static async Task InsertLegacyAsync(
+        SqliteConnection connection,
+        Transaction transaction,
+        string hash,
+        string amount,
+        string date)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO transactions
+                (canonical_hash, institution, external_id, amount, date, payee, type, plugin_version, downloaded_at)
+            VALUES
+                ($hash, $institution, $externalId, $amount, $date, $payee, $type, $pluginVersion, $downloadedAt);
+            """;
+        command.Parameters.AddWithValue("$hash", hash);
+        command.Parameters.AddWithValue("$institution", transaction.Institution);
+        command.Parameters.AddWithValue("$externalId", transaction.ExternalId);
+        command.Parameters.AddWithValue("$amount", amount);
+        command.Parameters.AddWithValue("$date", date);
+        command.Parameters.AddWithValue("$payee", transaction.Payee);
+        command.Parameters.AddWithValue("$type", transaction.Type);
+        command.Parameters.AddWithValue("$pluginVersion", "1.0.0");
+        command.Parameters.AddWithValue("$downloadedAt", "2026-01-01T00:00:00.0000000Z");
+        await command.ExecuteNonQueryAsync(Token);
     }
 
     private static async Task ExecuteAsync(SqliteConnection connection, string sql)

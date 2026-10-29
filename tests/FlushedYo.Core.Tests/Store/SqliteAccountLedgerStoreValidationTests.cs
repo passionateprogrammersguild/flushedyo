@@ -41,6 +41,7 @@ public sealed class SqliteAccountLedgerStoreValidationTests
             store.ImportAsync(Import(account, [AccountTx(account: account, externalId: "new")]), cts.Token));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.GetTransactionsAsync(account, cts.Token));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.GetImportHistoryAsync(account, cts.Token));
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.GetImportHistoryAsync(account, 1, cts.Token));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.GetLatestSafeDateAsync(account, cts.Token));
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() => store.GetCashStateAsync(account, cts.Token));
 
@@ -48,6 +49,31 @@ public sealed class SqliteAccountLedgerStoreValidationTests
         Assert.Single(await store.GetImportHistoryAsync(account, Token));
         Assert.Equal(originalResult.LatestSafeDate, await store.GetLatestSafeDateAsync(account, Token));
         Assert.Equal(originalResult.CashState, await store.GetCashStateAsync(account, Token));
+    }
+
+    [Fact]
+    public async Task CancellationAfterFirstInsertedRow_RollsBackEntireImport()
+    {
+        using var ledger = new TempLedger();
+        using var cts = CancellationTokenSource.CreateLinkedTokenSource(Token);
+        var insertedCallbacks = 0;
+        var store = new SqliteAccountLedgerStore(ledger.Database, () =>
+        {
+            insertedCallbacks++;
+            cts.Cancel();
+        });
+        var account = Account();
+        var first = AccountTx(account: account, externalId: "first");
+        var second = AccountTx(account: account, externalId: "second");
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            store.ImportAsync(Import(account, [first, second]), cts.Token));
+
+        Assert.Equal(1, insertedCallbacks);
+        Assert.Equal(0L, await ScalarAsync(ledger, "SELECT COUNT(*) FROM accounts;", Token));
+        Assert.Equal(0L, await ScalarAsync(ledger, "SELECT COUNT(*) FROM account_transactions;", Token));
+        Assert.Equal(0L, await ScalarAsync(ledger, "SELECT COUNT(*) FROM account_imports;", Token));
+        Assert.Equal(0L, await ScalarAsync(ledger, "SELECT COUNT(*) FROM account_progress;", Token));
     }
 
     [Fact]

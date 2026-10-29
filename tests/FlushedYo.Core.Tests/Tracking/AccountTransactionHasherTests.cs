@@ -1,4 +1,5 @@
 using FlushedYo.Core.Models;
+using FlushedYo.Core.Tests.Store;
 using FlushedYo.Core.Tracking;
 
 namespace FlushedYo.Core.Tests.Tracking;
@@ -83,6 +84,38 @@ public sealed class AccountTransactionHasherTests
         Assert.Equal(expectedError, error);
     }
 
+    [Theory]
+    [InlineData(256, true)]
+    [InlineData(257, false)]
+    public void TryValidateAccount_AccountKeyLengthAfterTrimming_EnforcesBoundary(int length, bool expectedValid)
+    {
+        var key = $" {new string('a', length)} ";
+
+        var valid = AccountTransactionHasher.TryValidateAccount(
+            new Account { Institution = "fidelity", AccountKey = key },
+            out var error);
+
+        Assert.Equal(expectedValid, valid);
+        Assert.Equal(expectedValid ? null : "account key is too long", error);
+    }
+
+    [Theory]
+    [InlineData("account\nkey")]
+    [InlineData("account\tkey")]
+    [InlineData("account\u001fkey")]
+    [InlineData("account\u007fkey")]
+    [InlineData("account\u0085key")]
+    public void TryValidateAccount_ControlCharacterInAccountKey_ReturnsValueFreeReason(string accountKey)
+    {
+        var valid = AccountTransactionHasher.TryValidateAccount(
+            new Account { Institution = "fidelity", AccountKey = accountKey },
+            out var error);
+
+        Assert.False(valid);
+        Assert.Equal("account key contains a control character", error);
+        Assert.DoesNotContain(accountKey, error, StringComparison.Ordinal);
+    }
+
     [Fact]
     public void TryValidate_MismatchedInstitutions_FailsClosed()
     {
@@ -102,18 +135,7 @@ public sealed class AccountTransactionHasherTests
     }
 
     private static AccountTransaction Tx(string institution = "fidelity", string accountKey = "account-1") =>
-        new()
-        {
-            Account = new Account { Institution = institution, AccountKey = accountKey },
-            Transaction = new Transaction
-            {
-                Institution = institution,
-                ExternalId = "abc-123",
-                Amount = -12.30m,
-                Date = new DateOnly(2026, 1, 2),
-                Payee = "Corner Store",
-                Type = "debit",
-            },
-            CashImpact = CashImpact.CashAffecting,
-        };
+        AccountLedgerTestData.AccountTx(
+            account: new Account { Institution = institution, AccountKey = accountKey },
+            transactionInstitution: institution);
 }

@@ -151,6 +151,12 @@ public sealed class AccountTransactionImporterTests
             CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
 
+        public Task<IReadOnlyList<AccountImportRecord>> GetImportHistoryAsync(
+            Account account,
+            int maximumRecords,
+            CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
+
         public Task<IReadOnlyList<AccountTransaction>> GetTransactionsAsync(
             Account account,
             CancellationToken cancellationToken = default) =>
