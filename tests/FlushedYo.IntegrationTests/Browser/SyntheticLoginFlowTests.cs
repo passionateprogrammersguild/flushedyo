@@ -173,6 +173,17 @@ internal sealed class SyntheticSite : IAsyncDisposable
         await WriteHtmlAsync(context, html);
     };
 
+    internal TaskCompletionSource MapGate(string path)
+    {
+        var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        _handlers[path] = async context =>
+        {
+            await gate.Task.WaitAsync(_lifetime.Token);
+            await WriteHtmlAsync(context, "ok");
+        };
+        return gate;
+    }
+
     internal void MapRedirect(string path, Uri destination) => _handlers[path] = context =>
     {
         context.Response.StatusCode = (int)HttpStatusCode.Redirect;

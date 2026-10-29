@@ -12,15 +12,18 @@ public sealed class BrowserAttackTests
         BrowserTestEnvironment.RequireChromium();
         await using var site = new SyntheticSite();
         var swapped = site.SignalWhenRequested("/swapped");
+        var gate = site.MapGate("/gate");
         site.MapHtml("/origin-swap", $$"""
             <!doctype html><input id="secret" type="password">
-            <script>setTimeout(() => location.href = 'http://localhost:{{site.Port}}/swapped', 50);</script>
+            <script>fetch('/gate').then(() => { location.href = 'http://localhost:{{site.Port}}/swapped'; });</script>
             """);
         site.MapHtml("/swapped", "<!doctype html><input id=\"secret\" type=\"password\">");
         await using var bridge = site.CreateBridge();
         await bridge.NavigateAsync(site.Url("/origin-swap"), Token);
         var expected = await bridge.GetSecuritySnapshotAsync(Token);
+        gate.SetResult();
         await swapped.WaitAsync(Token);
+        await WaitForSnapshotChangeAsync(bridge, expected);
 
         await Assert.ThrowsAnyAsync<BridgeException>(() =>
             bridge.EnterCredentialAsync("synthetic/password", "#secret", expected, Token));
@@ -54,15 +57,18 @@ public sealed class BrowserAttackTests
         BrowserTestEnvironment.RequireChromium();
         await using var site = new SyntheticSite();
         var swapped = site.SignalWhenRequested("/frame-swapped");
+        var gate = site.MapGate("/gate");
         site.MapHtml("/frame-swap", """
             <!doctype html><input id="secret" type="password">
-            <script>setTimeout(() => location.href = '/frame-swapped', 50);</script>
+            <script>fetch('/gate').then(() => { location.href = '/frame-swapped'; });</script>
             """);
         site.MapHtml("/frame-swapped", "<!doctype html><input id=\"secret\" type=\"password\">");
         await using var bridge = site.CreateBridge();
         await bridge.NavigateAsync(site.Url("/frame-swap"), Token);
         var expected = await bridge.GetSecuritySnapshotAsync(Token);
+        gate.SetResult();
         await swapped.WaitAsync(Token);
+        await WaitForSnapshotChangeAsync(bridge, expected);
 
         await Assert.ThrowsAnyAsync<BridgeException>(() =>
             bridge.EnterCredentialAsync("synthetic/password", "#secret", expected, Token));
@@ -98,6 +104,22 @@ public sealed class BrowserAttackTests
 
         await Assert.ThrowsAnyAsync<BridgeException>(() => bridge.NavigateAsync(site.Url("/redirect"), Token));
         await AssertFaulted(bridge);
+    }
+
+    private static async Task WaitForSnapshotChangeAsync(TrustedBrowserBridge bridge, BrowserSecuritySnapshot expected)
+    {
+        for (var attempt = 0; attempt < 200; attempt++)
+        {
+            var current = await bridge.GetSecuritySnapshotAsync(Token);
+            if (current != expected)
+            {
+                return;
+            }
+
+            await Task.Delay(25, Token);
+        }
+
+        Assert.Fail("The synthetic navigation did not commit within the bounded wait.");
     }
 
     private static async Task AssertFaulted(TrustedBrowserBridge bridge)
