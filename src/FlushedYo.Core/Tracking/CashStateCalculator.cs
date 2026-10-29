@@ -14,12 +14,14 @@ public static class CashStateCalculator
     /// known cash balance exists.
     /// </param>
     /// <param name="newlyInsertedTransactions">New rows in insertion order, never the whole downloaded batch.</param>
-    /// <param name="hasRejectedTransactions">Whether the import also contained invalid or ambiguous transactions.</param>
+    /// <param name="hasRejectedTransactions">Whether the import also contained invalid downloaded records.</param>
     /// <returns>
     /// A known cash state only when all inputs are explicit. Missing baselines produce an unknown state;
     /// rejected, ambiguous, correction, and unsupported activity produce reconciliation-needed states.
-    /// Decimal overflow also produces a reconciliation-needed state. Unknown and reconciliation-needed
-    /// states never contain fabricated balances or differences.
+    /// Decimal overflow also produces a reconciliation-needed state. Rejected records have first precedence
+    /// and map to <see cref="CashStateReason.AmbiguousTransaction"/>; otherwise the first unresolved row or
+    /// arithmetic failure encountered wins, and a missing baseline is considered only after all rows. Unknown
+    /// and reconciliation-needed states never contain fabricated balances or differences.
     /// </returns>
     public static CashState Calculate(
         decimal? openingCashBalance,

@@ -22,7 +22,7 @@ public enum CashStateReason
     /// <summary>No opening cash baseline or previously known cash balance is available.</summary>
     MissingBaseline,
 
-    /// <summary>A transaction was invalid or its cash treatment is ambiguous.</summary>
+    /// <summary>A downloaded record was rejected as invalid, or a stored transaction's cash treatment is ambiguous.</summary>
     AmbiguousTransaction,
 
     /// <summary>A correction requires explicit reconciliation.</summary>

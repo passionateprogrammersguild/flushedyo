@@ -19,8 +19,10 @@ public sealed record AccountImport
 
     /// <summary>
     /// Opening cash baseline for this import, or <see langword="null"/> to use the previously known cash
-    /// balance. A supplied baseline is authoritative, including on a duplicate-only import, so it can
-    /// explicitly resynchronize cash progress. A missing baseline on the first import produces an unknown state.
+    /// balance. A supplied baseline is authoritative for this import's newly inserted rows, including an
+    /// empty or duplicate-only import, so it can explicitly resynchronize after reconciliation without
+    /// replaying history. It does not override rejected or unresolved activity in the same import. A missing
+    /// baseline on the first import produces an unknown state.
     /// </summary>
     public decimal? OpeningCashBalance { get; init; }
 

@@ -12,11 +12,13 @@ namespace FlushedYo.Core.Tracking;
 /// <remarks>
 /// The scoped payload is the trimmed lowercase institution and trimmed case-sensitive account key,
 /// each prefixed by its UTF-16 length, followed by the transaction's legacy canonical hash. Length
-/// prefixes make the payload unambiguous without restricting opaque account keys. Equivalent legacy
+/// prefixes make the payload unambiguous while keeping account keys opaque. Equivalent legacy
 /// transactions in different accounts therefore have different scoped hashes.
 /// </remarks>
 public static class AccountTransactionHasher
 {
+    private const int MaximumAccountKeyLength = 256;
+
     /// <summary>Checks whether an account identity is valid.</summary>
     /// <param name="account">The account to check.</param>
     /// <param name="error">A short value-free reason, or <see langword="null"/> when valid.</param>
@@ -32,6 +34,14 @@ public static class AccountTransactionHasher
         else if (string.IsNullOrWhiteSpace(account.AccountKey))
         {
             error = "account key is empty";
+        }
+        else if (account.AccountKey.Trim().Length > MaximumAccountKeyLength)
+        {
+            error = "account key is too long";
+        }
+        else if (account.AccountKey.Any(char.IsControl))
+        {
+            error = "account key contains a control character";
         }
         else
         {
@@ -101,11 +111,9 @@ public static class AccountTransactionHasher
             throw new ArgumentException(error, nameof(accountTransaction));
         }
 
-        var account = NormalizeAccount(accountTransaction.Account);
+        var account = NormalizeValidatedAccount(accountTransaction.Account);
         var legacyHash = CanonicalTransactionHasher.ComputeHash(accountTransaction.Transaction);
-        return string.Create(
-            CultureInfo.InvariantCulture,
-            $"{account.Institution.Length}:{account.Institution}{account.AccountKey.Length}:{account.AccountKey}{legacyHash}");
+        return CanonicalizeValidated(account, legacyHash);
     }
 
     /// <summary>Computes the account-scoped dedup hash.</summary>
@@ -113,7 +121,10 @@ public static class AccountTransactionHasher
     /// <returns>64 lowercase hexadecimal characters.</returns>
     /// <exception cref="ArgumentException">The account transaction is invalid.</exception>
     public static string ComputeHash(AccountTransaction accountTransaction) =>
-        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(Canonicalize(accountTransaction))));
+        ComputeScopedHash(Canonicalize(accountTransaction));
+
+    internal static string ComputeHashFromLegacyHash(AccountTransaction accountTransaction, string legacyHash) =>
+        ComputeScopedHash(CanonicalizeValidated(NormalizeValidatedAccount(accountTransaction.Account), legacyHash));
 
     internal static Account NormalizeAccount(Account account)
     {
@@ -122,10 +133,21 @@ public static class AccountTransactionHasher
             throw new ArgumentException(error, nameof(account));
         }
 
-        return new Account
+        return NormalizeValidatedAccount(account);
+    }
+
+    internal static Account NormalizeValidatedAccount(Account account) =>
+        new()
         {
             Institution = account.Institution.Trim().ToLowerInvariant(),
             AccountKey = account.AccountKey.Trim(),
         };
-    }
+
+    private static string CanonicalizeValidated(Account account, string legacyHash) =>
+        string.Create(
+            CultureInfo.InvariantCulture,
+            $"{account.Institution.Length}:{account.Institution}{account.AccountKey.Length}:{account.AccountKey}{legacyHash}");
+
+    private static string ComputeScopedHash(string canonical) =>
+        Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(canonical)));
 }

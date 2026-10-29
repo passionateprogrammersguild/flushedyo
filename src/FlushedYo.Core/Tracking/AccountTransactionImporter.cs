@@ -18,15 +18,20 @@ public sealed partial class AccountTransactionImporter(
     /// <param name="transactions">Downloaded transactions, enumerated exactly once.</param>
     /// <param name="pluginVersion">Version of the plugin that supplied the batch.</param>
     /// <param name="openingCashBalance">
-    /// Optional opening cash baseline. When omitted, a previously known cash balance is used; the first
-    /// import without either baseline remains explicitly unknown. A supplied baseline is authoritative,
-    /// including for duplicate-only imports used to resynchronize cash progress.
+    /// Optional opening cash baseline for this import only. When omitted, a previously known cash balance
+    /// is used; the first import without either baseline remains explicitly unknown. A supplied baseline is
+    /// authoritative for the new rows in this import, including an empty or duplicate-only import used to
+    /// resynchronize after reconciliation. It does not reapply historical rows or override rejected,
+    /// correction, ambiguous, or unsupported activity in the same import.
     /// </param>
     /// <param name="cancellationToken">Token that cancels enumeration or persistence.</param>
     /// <returns>The atomically persisted import result.</returns>
     /// <remarks>
-    /// Validation rejections do not advance the safe-date watermark and make cash reconciliation necessary.
-    /// Store failures roll back the entire valid batch, so retrying cannot double-apply cash movements.
+    /// Validation rejections take precedence over every cash-activity reason, do not advance the safe-date
+    /// watermark, and make cash reconciliation necessary. A later clean import may advance the frozen
+    /// watermark; a later clean import with an explicit baseline may resynchronize cash without replaying
+    /// historical rows. Store failures and cancellation roll back the entire valid batch, so retrying cannot
+    /// double-apply cash movements.
     /// </remarks>
     public async Task<AccountImportResult> ImportAsync(
         Account account,
@@ -44,7 +49,7 @@ public sealed partial class AccountTransactionImporter(
             throw new ArgumentException(accountError, nameof(account));
         }
 
-        var normalizedAccount = AccountTransactionHasher.NormalizeAccount(account);
+        var normalizedAccount = AccountTransactionHasher.NormalizeValidatedAccount(account);
         var valid = new List<AccountTransaction>();
         var rejected = 0;
         var index = -1;
@@ -67,7 +72,7 @@ public sealed partial class AccountTransactionImporter(
                 continue;
             }
 
-            var itemAccount = AccountTransactionHasher.NormalizeAccount(transaction.Account);
+            var itemAccount = AccountTransactionHasher.NormalizeValidatedAccount(transaction.Account);
             if (!string.Equals(normalizedAccount.Institution, itemAccount.Institution, StringComparison.Ordinal) ||
                 !string.Equals(normalizedAccount.AccountKey, itemAccount.AccountKey, StringComparison.Ordinal))
             {

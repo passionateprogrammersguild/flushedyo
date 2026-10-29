@@ -22,21 +22,37 @@ public interface IAccountLedgerStore
     /// </exception>
     Task<AccountImportResult> ImportAsync(AccountImport import, CancellationToken cancellationToken = default);
 
-    /// <summary>Returns one account's completed imports in insertion order.</summary>
+    /// <summary>Returns all of one account's completed imports in insertion order.</summary>
     /// <param name="account">Institution-scoped account identity.</param>
     /// <param name="cancellationToken">Token that cancels the query.</param>
     /// <returns>
     /// Only history belonging to <paramref name="account"/>. Each entry contains the counts, inclusive
-    /// safe-date watermark, and cash-only state persisted atomically with that import.
+    /// safe-date watermark, and cash-only state persisted atomically with that import. This compatibility
+    /// overload returns a complete snapshot; callers that do not need full history should use the bounded
+    /// overload to cap database reads and materialization.
     /// </returns>
     Task<IReadOnlyList<AccountImportRecord>> GetImportHistoryAsync(
         Account account,
         CancellationToken cancellationToken = default);
 
+    /// <summary>Returns the most recent completed imports for one account, in insertion order.</summary>
+    /// <param name="account">Institution-scoped account identity.</param>
+    /// <param name="maximumRecords">Positive maximum number of records to read and return.</param>
+    /// <param name="cancellationToken">Token that cancels the query.</param>
+    /// <returns>At most <paramref name="maximumRecords"/> records, ordered from oldest to newest.</returns>
+    /// <exception cref="ArgumentOutOfRangeException"><paramref name="maximumRecords"/> is not positive.</exception>
+    Task<IReadOnlyList<AccountImportRecord>> GetImportHistoryAsync(
+        Account account,
+        int maximumRecords,
+        CancellationToken cancellationToken = default);
+
     /// <summary>Returns one account's transactions in insertion order.</summary>
     /// <param name="account">Institution-scoped account identity.</param>
     /// <param name="cancellationToken">Token that cancels the query.</param>
-    /// <returns>Only transactions belonging to <paramref name="account"/>.</returns>
+    /// <returns>
+    /// Only transactions belonging to <paramref name="account"/>. The ordered, materialized snapshot is
+    /// intentional: callers receive stable insertion order without holding a database connection or reader.
+    /// </returns>
     Task<IReadOnlyList<AccountTransaction>> GetTransactionsAsync(Account account, CancellationToken cancellationToken = default);
 
     /// <summary>Reads the current inclusive safe-date watermark for one account.</summary>

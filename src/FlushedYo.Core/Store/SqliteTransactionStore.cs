@@ -65,12 +65,15 @@ public sealed class SqliteTransactionStore(LedgerDatabase database) : ITransacti
 
         var inserted = await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
 
-        await using (var assignment = connection.CreateCommand())
+        if (inserted)
         {
+            // Migration v3 assigned every pre-existing row, and every new mixed write creates its assignment
+            // here. Replaying a duplicate therefore needs no second assignment statement.
+            await using var assignment = connection.CreateCommand();
             assignment.Transaction = dbTransaction;
             assignment.CommandText =
                 """
-                INSERT OR IGNORE INTO legacy_account_assignments (transaction_id, account_id)
+                INSERT INTO legacy_account_assignments (transaction_id, account_id)
                 SELECT id, NULL FROM transactions WHERE canonical_hash = $hash;
                 """;
             assignment.Parameters.AddWithValue("$hash", audit.CanonicalHash);

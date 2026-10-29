@@ -13,6 +13,9 @@ public sealed record Account
     /// <summary>Institution key that owns the account, for example <c>fidelity</c>.</summary>
     public required string Institution { get; init; }
 
-    /// <summary>Stable opaque account identifier, unique within <see cref="Institution"/>.</summary>
+    /// <summary>
+    /// Stable opaque account identifier, unique within <see cref="Institution"/>. After trimming, at most
+    /// 256 UTF-16 code units are accepted; control characters are rejected to keep identifiers log-safe.
+    /// </summary>
     public required string AccountKey { get; init; }
 }

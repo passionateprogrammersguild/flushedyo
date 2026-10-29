@@ -15,6 +15,21 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
     private const string AmbiguousSourceMessage =
         "An account transaction source identity is ambiguous; the import was not recorded.";
 
+    // SQLite result codes from sqlite3.h: extended codes encode as primary | (kind << 8), so
+    // SQLITE_CONSTRAINT_UNIQUE is 19 | (8 << 8) == 2067 — a fixed, documented encoding, unlike the
+    // error-message text, which is not a stable contract. Microsoft.Data.Sqlite always populates
+    // SqliteException.SqliteExtendedErrorCode via sqlite3_extended_errcode.
+    private const int SqliteConstraintError = 19;
+    private const int SqliteUniqueConstraintExtendedError = 2067;
+
+    private readonly Action? afterTransactionInsert;
+
+    internal SqliteAccountLedgerStore(LedgerDatabase database, Action? afterTransactionInsert)
+        : this(database)
+    {
+        this.afterTransactionInsert = afterTransactionInsert;
+    }
+
     /// <inheritdoc />
     public async Task<AccountImportResult> ImportAsync(AccountImport import, CancellationToken cancellationToken = default)
     {
@@ -28,17 +43,20 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
 
         var inserted = new List<AccountTransaction>();
         var skipped = 0;
+        await using var insertCommand = CreateInsertCommand(connection, transaction, accountId, prepared);
+        await using var duplicateCommand = CreateDuplicateCommand(connection, transaction);
         foreach (var item in prepared.Transactions)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (await InsertTransactionAsync(connection, transaction, accountId, item, prepared, cancellationToken).ConfigureAwait(false))
+            if (await InsertTransactionAsync(connection, transaction, accountId, insertCommand, item, cancellationToken).ConfigureAwait(false))
             {
                 inserted.Add(item.Value);
+                afterTransactionInsert?.Invoke();
             }
             else
             {
                 skipped++;
-                await VerifyDuplicateAsync(connection, transaction, item, cancellationToken).ConfigureAwait(false);
+                await VerifyDuplicateAsync(duplicateCommand, item, cancellationToken).ConfigureAwait(false);
             }
         }
 
@@ -78,26 +96,55 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
     }
 
     /// <inheritdoc />
-    public async Task<IReadOnlyList<AccountImportRecord>> GetImportHistoryAsync(
+    public Task<IReadOnlyList<AccountImportRecord>> GetImportHistoryAsync(
         Account account,
+        CancellationToken cancellationToken = default) =>
+        ReadImportHistoryAsync(account, maximumRecords: null, cancellationToken);
+
+    /// <inheritdoc />
+    public Task<IReadOnlyList<AccountImportRecord>> GetImportHistoryAsync(
+        Account account,
+        int maximumRecords,
         CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maximumRecords);
+        return ReadImportHistoryAsync(account, maximumRecords, cancellationToken);
+    }
+
+    private async Task<IReadOnlyList<AccountImportRecord>> ReadImportHistoryAsync(
+        Account account,
+        int? maximumRecords,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var normalized = AccountTransactionHasher.NormalizeAccount(account);
 
         await using var connection = await database.OpenAsync(cancellationToken).ConfigureAwait(false);
         await using var command = connection.CreateCommand();
-        command.CommandText =
-            """
-            SELECT i.plugin_version, i.imported_at, i.inserted, i.skipped, i.rejected, i.latest_safe_date,
-                   i.cash_status, i.cash_reason, i.opening_cash_balance, i.cash_balance, i.cash_difference
-            FROM account_imports AS i
-            INNER JOIN accounts AS a ON a.id = i.account_id
-            WHERE a.institution = $institution AND a.account_key = $accountKey
-            ORDER BY i.id;
-            """;
+        command.CommandText = maximumRecords is null
+            ? """
+              SELECT i.plugin_version, i.imported_at, i.inserted, i.skipped, i.rejected, i.latest_safe_date,
+                     i.cash_status, i.cash_reason, i.opening_cash_balance, i.cash_balance, i.cash_difference
+              FROM account_imports AS i
+              INNER JOIN accounts AS a ON a.id = i.account_id
+              WHERE a.institution = $institution AND a.account_key = $accountKey
+              ORDER BY i.id;
+              """
+            : """
+              SELECT i.plugin_version, i.imported_at, i.inserted, i.skipped, i.rejected, i.latest_safe_date,
+                     i.cash_status, i.cash_reason, i.opening_cash_balance, i.cash_balance, i.cash_difference
+              FROM account_imports AS i
+              INNER JOIN accounts AS a ON a.id = i.account_id
+              WHERE a.institution = $institution AND a.account_key = $accountKey
+              ORDER BY i.id DESC
+              LIMIT $maximumRecords;
+              """;
         command.Parameters.AddWithValue("$institution", normalized.Institution);
         command.Parameters.AddWithValue("$accountKey", normalized.AccountKey);
+        if (maximumRecords is not null)
+        {
+            command.Parameters.AddWithValue("$maximumRecords", maximumRecords.Value);
+        }
 
         var history = new List<AccountImportRecord>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -115,6 +162,11 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
                     : DateOnly.ParseExact(reader.GetString(5), DateFormat, CultureInfo.InvariantCulture),
                 CashState = ReadCashState(reader, statusColumn: 6),
             });
+        }
+
+        if (maximumRecords is not null)
+        {
+            history.Reverse();
         }
 
         return history;
@@ -240,7 +292,7 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
                 throw new ArgumentException($"Invalid account transaction: {error}.", nameof(import));
             }
 
-            var itemAccount = AccountTransactionHasher.NormalizeAccount(value.Account);
+            var itemAccount = AccountTransactionHasher.NormalizeValidatedAccount(value.Account);
             if (!string.Equals(account.Institution, itemAccount.Institution, StringComparison.Ordinal) ||
                 !string.Equals(account.AccountKey, itemAccount.AccountKey, StringComparison.Ordinal))
             {
@@ -248,10 +300,12 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
             }
 
             var normalized = value with { Account = itemAccount };
+            var legacyHash = CanonicalTransactionHasher.ComputeHash(normalized.Transaction);
             transactions.Add(new PreparedTransaction(
                 normalized,
-                AccountTransactionHasher.ComputeHash(normalized),
-                CanonicalTransactionHasher.ComputeHash(normalized.Transaction)));
+                AccountTransactionHasher.ComputeHashFromLegacyHash(normalized, legacyHash),
+                legacyHash,
+                normalized.Transaction.ExternalId.Trim()));
         }
 
         return new PreparedImport(
@@ -322,15 +376,13 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
         return new AccountProgress(latestSafeDate, ReadCashState(reader, statusColumn: 1));
     }
 
-    private static async Task<bool> InsertTransactionAsync(
+    private static SqliteCommand CreateInsertCommand(
         SqliteConnection connection,
         SqliteTransaction transaction,
         long accountId,
-        PreparedTransaction item,
-        PreparedImport import,
-        CancellationToken cancellationToken)
+        PreparedImport import)
     {
-        await using var command = connection.CreateCommand();
+        var command = connection.CreateCommand();
         command.Transaction = transaction;
         command.CommandText =
             """
@@ -343,70 +395,103 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
             ON CONFLICT(dedup_hash) DO NOTHING;
             """;
         command.Parameters.AddWithValue("$accountId", accountId);
-        command.Parameters.AddWithValue("$dedupHash", item.DedupHash);
-        command.Parameters.AddWithValue("$legacyHash", item.LegacyHash);
-        command.Parameters.AddWithValue("$institution", item.Value.Transaction.Institution);
-        command.Parameters.AddWithValue("$sourceKey", item.Value.Transaction.ExternalId.Trim());
-        command.Parameters.AddWithValue("$externalId", item.Value.Transaction.ExternalId);
-        command.Parameters.AddWithValue("$amount", FormatDecimal(item.Value.Transaction.Amount));
-        command.Parameters.AddWithValue("$date", item.Value.Transaction.Date.ToString(DateFormat, CultureInfo.InvariantCulture));
-        command.Parameters.AddWithValue("$payee", item.Value.Transaction.Payee);
-        command.Parameters.AddWithValue("$type", item.Value.Transaction.Type);
-        command.Parameters.AddWithValue("$cashImpact", ToStorage(item.Value.CashImpact));
+        command.Parameters.Add("$dedupHash", SqliteType.Text);
+        command.Parameters.Add("$legacyHash", SqliteType.Text);
+        command.Parameters.Add("$institution", SqliteType.Text);
+        command.Parameters.Add("$sourceKey", SqliteType.Text);
+        command.Parameters.Add("$externalId", SqliteType.Text);
+        command.Parameters.Add("$amount", SqliteType.Text);
+        command.Parameters.Add("$date", SqliteType.Text);
+        command.Parameters.Add("$payee", SqliteType.Text);
+        command.Parameters.Add("$type", SqliteType.Text);
+        command.Parameters.Add("$cashImpact", SqliteType.Text);
         command.Parameters.AddWithValue("$pluginVersion", import.PluginVersion);
         command.Parameters.AddWithValue("$downloadedAt", FormatTimestamp(import.ImportedAt));
+        return command;
+    }
+
+    private static SqliteCommand CreateDuplicateCommand(SqliteConnection connection, SqliteTransaction transaction)
+    {
+        var command = connection.CreateCommand();
+        command.Transaction = transaction;
+        command.CommandText = "SELECT source_key, cash_impact FROM account_transactions WHERE dedup_hash = $dedupHash;";
+        command.Parameters.Add("$dedupHash", SqliteType.Text);
+        return command;
+    }
+
+    private static async Task<bool> InsertTransactionAsync(
+        SqliteConnection connection,
+        SqliteTransaction transaction,
+        long accountId,
+        SqliteCommand command,
+        PreparedTransaction item,
+        CancellationToken cancellationToken)
+    {
+        command.Parameters["$dedupHash"].Value = item.DedupHash;
+        command.Parameters["$legacyHash"].Value = item.LegacyHash;
+        command.Parameters["$institution"].Value = item.Value.Transaction.Institution;
+        command.Parameters["$sourceKey"].Value = item.SourceKey;
+        command.Parameters["$externalId"].Value = item.Value.Transaction.ExternalId;
+        command.Parameters["$amount"].Value = FormatDecimal(item.Value.Transaction.Amount);
+        command.Parameters["$date"].Value = item.Value.Transaction.Date.ToString(DateFormat, CultureInfo.InvariantCulture);
+        command.Parameters["$payee"].Value = item.Value.Transaction.Payee;
+        command.Parameters["$type"].Value = item.Value.Transaction.Type;
+        command.Parameters["$cashImpact"].Value = ToStorage(item.Value.CashImpact);
 
         try
         {
             return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false) == 1;
         }
         catch (SqliteException exception) when (
-            exception.SqliteErrorCode == 19 && exception.SqliteExtendedErrorCode == 2067)
+            exception.SqliteErrorCode == SqliteConstraintError &&
+            exception.SqliteExtendedErrorCode == SqliteUniqueConstraintExtendedError)
         {
-            if (await SourceIdentityExistsAsync(
-                    connection,
-                    transaction,
-                    accountId,
-                    item.Value.Transaction.ExternalId.Trim(),
-                    cancellationToken).ConfigureAwait(false))
+            // Restricting the filter to SQLITE_CONSTRAINT_UNIQUE keeps unrelated constraint kinds —
+            // e.g. a RAISE(ABORT) trigger's extended code — surfacing raw even when same-source data
+            // already exists for the account.
+            if (await HasSourceIdentityRowAsync(connection, transaction, accountId, item.SourceKey, cancellationToken)
+                    .ConfigureAwait(false))
             {
                 throw new LedgerException(AmbiguousSourceMessage, exception);
             }
 
+            // A unique index other than the source identity fired; do not misreport it.
             throw;
         }
     }
 
-    private static async Task<bool> SourceIdentityExistsAsync(
+    private static async Task<bool> HasSourceIdentityRowAsync(
         SqliteConnection connection,
         SqliteTransaction transaction,
         long accountId,
         string sourceKey,
         CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText =
-            "SELECT 1 FROM account_transactions WHERE account_id = $accountId AND source_key = $sourceKey LIMIT 1;";
-        command.Parameters.AddWithValue("$accountId", accountId);
-        command.Parameters.AddWithValue("$sourceKey", sourceKey);
-        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not null;
+        // Under SQLite's default ABORT resolution the failed statement rolled back while this
+        // transaction stays usable, so this probe classifies a conflict that already happened; it is
+        // not check-then-insert, and the atomic ON CONFLICT(dedup_hash) DO NOTHING result remains the
+        // source of truth for dedup.
+        await using var probe = connection.CreateCommand();
+        probe.Transaction = transaction;
+        probe.CommandText =
+            """
+            SELECT 1 FROM account_transactions WHERE account_id = $accountId AND source_key = $sourceKey;
+            """;
+        probe.Parameters.AddWithValue("$accountId", accountId);
+        probe.Parameters.AddWithValue("$sourceKey", sourceKey);
+        var row = await probe.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        return row is not null and not DBNull;
     }
 
     private static async Task VerifyDuplicateAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
+        SqliteCommand command,
         PreparedTransaction item,
         CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
-        command.CommandText = "SELECT source_key, cash_impact FROM account_transactions WHERE dedup_hash = $dedupHash;";
-        command.Parameters.AddWithValue("$dedupHash", item.DedupHash);
-
+        command.Parameters["$dedupHash"].Value = item.DedupHash;
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
-            !string.Equals(reader.GetString(0), item.Value.Transaction.ExternalId.Trim(), StringComparison.Ordinal) ||
+            !string.Equals(reader.GetString(0), item.SourceKey, StringComparison.Ordinal) ||
             ParseCashImpact(reader.GetString(1)) != item.Value.CashImpact)
         {
             throw new LedgerException(AmbiguousSourceMessage);
@@ -631,7 +716,11 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
         decimal? OpeningCashBalance,
         int Rejected);
 
-    private sealed record PreparedTransaction(AccountTransaction Value, string DedupHash, string LegacyHash);
+    private sealed record PreparedTransaction(
+        AccountTransaction Value,
+        string DedupHash,
+        string LegacyHash,
+        string SourceKey);
 
     private sealed record AccountProgress(DateOnly? LatestSafeDate, CashState CashState);
 }
