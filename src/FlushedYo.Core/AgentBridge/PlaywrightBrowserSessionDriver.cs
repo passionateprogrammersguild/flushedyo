@@ -37,8 +37,8 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
     private int _started;
     private int _closed;
     private int _disposed;
-    private bool _closeFailed;
-    private string _faultReason = "browser state";
+    private volatile bool _closeFailed;
+    private volatile string _faultReason = "browser state";
 
     internal PlaywrightBrowserSessionDriver(
         ProviderBrowserPolicy policy,
@@ -59,6 +59,7 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
+        RejectPlaywrightDebugLogging();
         if (Interlocked.Exchange(ref _started, 1) != 0)
         {
             throw new BridgeOperationException("The isolated browser session has already been started.");
@@ -364,6 +365,20 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
             BrowserConnected = RequiredBrowser().IsConnected,
             PageClosed = page.IsClosed,
         };
+    }
+
+    // Playwright's in-process API logging (DEBUG=pw:api) records every call argument, including the
+    // value passed to fill; PWDEBUG also attaches the inspector. Neither is acceptable around credentials.
+    private static void RejectPlaywrightDebugLogging()
+    {
+        var debug = Environment.GetEnvironmentVariable("DEBUG");
+        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PWDEBUG")) ||
+            (!string.IsNullOrEmpty(debug) &&
+             (debug.Contains("pw:", StringComparison.OrdinalIgnoreCase) || debug.Contains('*', StringComparison.Ordinal))))
+        {
+            throw new BridgeOperationException(
+                "Playwright debug logging is enabled and could record credentials; unset PWDEBUG and DEBUG.");
+        }
     }
 
     private async Task RouteAsync(IRoute route)

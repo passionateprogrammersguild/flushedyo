@@ -272,10 +272,18 @@ public sealed partial class TrustedBrowserBridge : IAsyncDisposable
         var actual = await _driver.GetSecuritySnapshotAsync(cancellationToken).ConfigureAwait(false);
         if (!string.Equals(actual.TargetId, expectedSnapshot.TargetId, StringComparison.Ordinal) ||
             !string.Equals(actual.TopLevelFrameId, expectedSnapshot.TopLevelFrameId, StringComparison.Ordinal) ||
+            !string.Equals(actual.Origin, expectedSnapshot.Origin, StringComparison.Ordinal) ||
             !Uri.TryCreate(actual.Origin, UriKind.Absolute, out var origin) ||
             !_policy.IsAllowed(origin))
         {
             throw new BridgeSnapshotException("The browser target or origin changed unexpectedly after submission.");
+        }
+
+        // A submission is only reported once a new document committed. A page that swallows the
+        // keypress, or a same-document update, is not evidence that the form was submitted.
+        if (string.Equals(actual.LoaderId, expectedSnapshot.LoaderId, StringComparison.Ordinal))
+        {
+            throw new BridgeOperationException("No document navigation was observed after submission.");
         }
     }
 

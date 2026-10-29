@@ -110,18 +110,39 @@ public sealed class TrustedBrowserBridgeCredentialTests
     }
 
     [Fact]
-    public async Task SubmitWithoutDocumentChange_Succeeds()
+    public async Task SubmitWithoutObservedNavigation_IsNotReportedAsSuccess()
     {
         using var harness = new BridgeTestHarness();
 
-        await harness.Bridge.SubmitCredentialAsync(
+        await Assert.ThrowsAsync<BridgeOperationException>(() => harness.Bridge.SubmitCredentialAsync(
             "website/password",
             "#password",
             harness.Driver.CurrentSnapshot,
-            Token);
+            Token));
 
         Assert.Equal(["focus", "fill", "submit"], harness.Driver.DomSteps);
-        Assert.False(harness.Driver.Closed);
+        Assert.True(harness.Driver.Closed);
+    }
+
+    [Fact]
+    public async Task NavigationToDifferentAllowedOriginAfterSubmit_FaultsAndClosesSession()
+    {
+        using var harness = new BridgeTestHarness();
+        var expected = harness.Driver.CurrentSnapshot;
+        harness.Driver.StageHook = (stage, _) =>
+        {
+            if (stage == "submit")
+            {
+                harness.Driver.CurrentSnapshot = Snapshot(origin: "https://other.example:443", loaderId: "loader-2", securityVersion: 2);
+            }
+
+            return Task.CompletedTask;
+        };
+
+        await Assert.ThrowsAsync<BridgeSnapshotException>(() =>
+            harness.Bridge.SubmitCredentialAsync("website/password", "#password", expected, Token));
+
+        Assert.True(harness.Driver.Closed);
     }
 
     [Fact]
