@@ -4,15 +4,15 @@ Branch `factory/008`, based on `fidelity-download` (`cee40a5`). `main` is an emp
 
 ## Result
 
-Implemented and verified locally. Independent security/performance/systemic panel review has NOT been run; it is required before merge (spec "Done when").
+Implemented and verified locally. An independent security review ran (see "Security review" below): no blockers, one major (fixed). The performance and systemic panels have NOT been run; the full high-risk panel is still required before merge (spec "Done when").
 
 | Check | Result |
 |---|---|
 | `dotnet build flushedyo.slnx` | 0 warnings, 0 errors |
-| `tests/FlushedYo.Core.Tests` | 505 total, 504 passed, 1 skipped (case-sensitive filesystem skip, pre-existing) |
+| `tests/FlushedYo.Core.Tests` | 506 total, 505 passed, 1 skipped (case-sensitive filesystem skip, pre-existing) |
 | `tests/FlushedYo.ArchitectureTests` | 15 passed |
-| `tests/FlushedYo.IntegrationTests --filter "Category!=Live&Category!=Network"` | 109 passed, 0 failed, 0 skipped |
-| Real-browser suite (`Browser/`, 11 tests, one serial `RealBrowser` collection) | 11 passed, 0 skipped |
+| `tests/FlushedYo.IntegrationTests --filter "Category!=Live&Category!=Network"` | 111 passed, 0 failed, 0 skipped |
+| Real-browser suite (`Browser/`, 13 tests, one serial `RealBrowser` collection) | 13 passed, 0 skipped |
 | `dotnet format flushedyo.slnx --verify-no-changes` | exit 0 |
 | Live and Network categories | not run (need vault / `npx`; unrelated to this unit) |
 
@@ -53,8 +53,26 @@ The unit-006 fallback clause was invoked, not skipped. `--cdp-endpoint` shares t
 
 No matches for: `cdp-endpoint`, `remote-endpoint`, `remote-debugging-port`, `ModelContextProtocol`, `playwright/mcp`, `connectOverCDP`, `LaunchServer`, `Regex`, `TitleAsync`, `InnerText`, `TextContent`, `ContentAsync`, `EvaluateAsync`, `Screenshot`, `StartTracing`, `RecordHar`, `RecordVideo`. `NoEndpointTests` additionally inspects live Chromium command lines (`--remote-debugging-pipe` present; no `--remote-debugging-port`/`-address`) and asserts no browser process holds a TCP listener.
 
+## Security review (independent evaluator, read-only)
+
+No blockers. Both prior rejection reasons confirmed fixed: no page-derived text reaches any trust decision, and the operation gate is held through teardown. Findings and disposition:
+
+| # | Severity | Finding | Disposition |
+|---|---|---|---|
+| 1 | major | `SubmitCredentialAsync` could report success with no evidence a submission happened (page swallowing Enter, or same-URL re-render) | Fixed: post-submit check now requires a new committed document (loader id changed); otherwise `BridgeOperationException` and the session closes. Same-document/SPA logins therefore fail closed by design. Tests: hermetic `SubmitWithoutObservedNavigation_IsNotReportedAsSuccess`; real browser `PageThatSwallowsTheSubmitKeypress_IsNotReportedAsSubmitted`. |
+| 2 | minor | Post-submit check accepted any allow-listed origin, not the original | Fixed: must equal the pre-submit origin. A deliberate cross-origin post-login hop needs a future explicit parameter. Test: `NavigationToDifferentAllowedOriginAfterSubmit_FaultsAndClosesSession`. |
+| 3 | minor | `DEBUG=pw:api` / `PWDEBUG` could log the filled secret | Fixed: `StartAsync` rejects `PWDEBUG`, `DEBUG` containing `pw:` or `*`. Test: `PlaywrightDebugLogging_IsRejectedBeforeAnyBrowserStarts` (in the serial `RealBrowser` collection because it mutates a process-wide variable that only Playwright users read). |
+| 6 | minor | `_closeFailed` / `_faultReason` non-volatile | Fixed: both volatile. |
+| 4 | minor | `BrowserExecutablePath` executed unvalidated | OPEN: needs an opt-in flag; same trust level as config control. |
+| 5 | minor | Unbounded browser-event channel (page-driven memory growth before fault) | OPEN: use a bounded channel; session is already faulted after the first extra target. |
+| 7a | minor (test) | Popup test could pass for the wrong reason (asserts only some `BridgeException` + faulted) | OPEN: assert the fault category or that the popup target appeared. |
+| 7b | minor (test) | No structural test that launch/context options keep sandbox, no downloads, service workers blocked, no HAR/video/tracing | OPEN: regression-prone gap. |
+| 7c | minor (test) | Missing: submit to a second allow-listed origin via form action in a real browser; `beforeunload` during submit; disposal racing a submit | PARTIAL: second-origin covered hermetically only. |
+
+The reviewer did not read `ManualMfaBrowserTests.cs`, the hermetic test files, or the csproj/props diff, and did not run anything; those remain covered only by the implementor's runs above.
+
 ## Not done
 
-- Independent high-risk review panel (security, performance, systemic).
+- Performance and systemic review panels; fixing or explicitly accepting the OPEN security minors above.
 - Merge, and later cleanup of the frozen 002/006 worktrees.
 - Repeated-run stability check of the browser suite beyond the passes recorded above.
