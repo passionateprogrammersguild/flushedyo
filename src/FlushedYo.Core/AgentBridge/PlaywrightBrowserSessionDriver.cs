@@ -36,6 +36,7 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
     private int _started;
     private int _closed;
     private bool _closeFailed;
+    private string _faultReason = "browser state";
 
     internal PlaywrightBrowserSessionDriver(
         ProviderBrowserPolicy policy,
@@ -137,7 +138,7 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         ThrowIfUnavailable();
         if (!_policy.IsAllowed(destination))
         {
-            Fault();
+            Fault("browser state");
             throw new BridgePolicyException("The browser destination origin is not allowed.");
         }
 
@@ -160,12 +161,12 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         }
         catch (BridgeException)
         {
-            Fault();
+            Fault("browser state");
             throw;
         }
         catch (Exception)
         {
-            Fault();
+            Fault("browser state");
             throw new BridgeOperationException("The browser navigation failed or was blocked.");
         }
     }
@@ -222,17 +223,17 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         }
         catch (OperationCanceledException)
         {
-            Fault();
+            Fault("browser state");
             throw;
         }
         catch (BridgeException)
         {
-            Fault();
+            Fault("browser state");
             throw;
         }
         catch (Exception)
         {
-            Fault();
+            Fault("browser state");
             throw new BridgeOperationException("The credential operation failed safely.");
         }
         finally
@@ -245,7 +246,7 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
                 }
                 catch (Exception)
                 {
-                    Fault();
+                    Fault("browser state");
                 }
             }
         }
@@ -338,7 +339,7 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
                              (!Uri.TryCreate(request.Url, UriKind.Absolute, out var requestUrl) || !_policy.IsAllowed(requestUrl));
             if (frozen || disallowed)
             {
-                Fault();
+                Fault("blocked document request");
                 await route.AbortAsync("BlockedByClient").ConfigureAwait(false);
                 return;
             }
@@ -347,7 +348,7 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         }
         catch (Exception)
         {
-            Fault();
+            Fault("route failure");
             try
             {
                 await route.AbortAsync("BlockedByClient").ConfigureAwait(false);
@@ -361,24 +362,24 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
 
     private void SubscribeToSecurityEvents()
     {
-        RequiredBrowser().Disconnected += (_, _) => Fault();
+        RequiredBrowser().Disconnected += (_, _) => Fault("browser disconnected");
         RequiredContext().Page += (_, page) =>
         {
             ChangeSecurityState();
             if (!ReferenceEquals(page, _page))
             {
-                Fault();
+                Fault("additional page");
                 Enqueue(BrowserEventCommand.ForPage(page));
             }
         };
 
         var page = RequiredPage();
-        page.Crash += (_, _) => Fault();
+        page.Crash += (_, _) => Fault("page crash");
         page.Close += (_, _) =>
         {
             if (Volatile.Read(ref _closed) == 0)
             {
-                Fault();
+                Fault("page closed");
             }
         };
         page.FrameNavigated += (_, _) => ChangeSecurityState();
@@ -398,20 +399,26 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         ChangeSecurityState();
         if (data is not { ValueKind: JsonValueKind.Object } payload)
         {
-            Fault();
+            Fault("invalid target event");
             return;
         }
 
         var targetId = ReadString(payload, "targetInfo", "targetId");
-        if (string.IsNullOrEmpty(targetId))
+        var targetType = ReadString(payload, "targetInfo", "type");
+        if (string.IsNullOrEmpty(targetId) || string.IsNullOrEmpty(targetType))
         {
-            Fault();
+            Fault("incomplete target event");
+            return;
+        }
+
+        if (targetType == "browser")
+        {
             return;
         }
 
         if (!string.Equals(targetId, _originalTargetId, StringComparison.Ordinal))
         {
-            Fault();
+            Fault($"additional {targetType} target");
             Enqueue(BrowserEventCommand.ForTarget(targetId));
         }
     }
@@ -435,7 +442,7 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
             }
             catch (Exception)
             {
-                Fault();
+                Fault("browser state");
             }
         }
     }
@@ -444,7 +451,7 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
     {
         if (Volatile.Read(ref _closed) == 0 && !_browserEvents.Writer.TryWrite(command))
         {
-            Fault();
+            Fault("browser state");
         }
     }
 
@@ -566,12 +573,13 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         ObjectDisposedException.ThrowIf(Volatile.Read(ref _closed) != 0, this);
         if (Volatile.Read(ref _started) == 0 || IsFaulted)
         {
-            throw new BridgeSnapshotException("The isolated browser session is unavailable or faulted.");
+            throw new BridgeSnapshotException($"The isolated browser session is unavailable or faulted ({_faultReason}).");
         }
     }
 
-    private void Fault()
+    private void Fault(string reason)
     {
+        _faultReason = reason;
         Interlocked.Exchange(ref _faulted, 1);
         ChangeSecurityState();
     }
