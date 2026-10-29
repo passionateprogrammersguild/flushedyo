@@ -2,6 +2,7 @@ using System.Diagnostics;
 
 namespace FlushedYo.IntegrationTests.Browser;
 
+[Collection("RealBrowser")]
 public sealed class NoEndpointTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;

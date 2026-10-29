@@ -2,6 +2,7 @@ using FlushedYo.Core.AgentBridge;
 
 namespace FlushedYo.IntegrationTests.Browser;
 
+[Collection("RealBrowser")]
 public sealed class BrowserAttackTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;

@@ -7,6 +7,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 
 namespace FlushedYo.IntegrationTests.Browser;
 
+[Collection("RealBrowser")]
 public sealed class SyntheticLoginFlowTests
 {
     private static CancellationToken Token => TestContext.Current.CancellationToken;
@@ -143,7 +144,7 @@ internal sealed class SyntheticSite : IAsyncDisposable
             Headless = !headed,
             NavigationTimeout = TimeSpan.FromSeconds(15),
             ActionTimeout = TimeSpan.FromSeconds(10),
-            TeardownTimeout = TimeSpan.FromSeconds(5),
+            TeardownTimeout = TimeSpan.FromSeconds(15),
             MaxMfaTimeout = TimeSpan.FromSeconds(3),
             BrowserExecutablePath = BrowserTestEnvironment.RequireChromium(),
         },
