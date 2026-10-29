@@ -237,6 +237,7 @@ public sealed partial class TrustedBrowserBridge : IAsyncDisposable
                         secret,
                         submit,
                         token => VerifyExpectedSnapshotAsync(expectedSnapshot, token),
+                        token => VerifyPostSubmitSnapshotAsync(expectedSnapshot, token),
                         token).ConfigureAwait(false);
                 }
                 finally
@@ -261,6 +262,20 @@ public sealed partial class TrustedBrowserBridge : IAsyncDisposable
         if (actual != expectedSnapshot)
         {
             throw new BridgeSnapshotException("The browser security snapshot changed before credential completion.");
+        }
+    }
+
+    private async Task VerifyPostSubmitSnapshotAsync(
+        BrowserSecuritySnapshot expectedSnapshot,
+        CancellationToken cancellationToken)
+    {
+        var actual = await _driver.GetSecuritySnapshotAsync(cancellationToken).ConfigureAwait(false);
+        if (!string.Equals(actual.TargetId, expectedSnapshot.TargetId, StringComparison.Ordinal) ||
+            !string.Equals(actual.TopLevelFrameId, expectedSnapshot.TopLevelFrameId, StringComparison.Ordinal) ||
+            !Uri.TryCreate(actual.Origin, UriKind.Absolute, out var origin) ||
+            !_policy.IsAllowed(origin))
+        {
+            throw new BridgeSnapshotException("The browser target or origin changed unexpectedly after submission.");
         }
     }
 

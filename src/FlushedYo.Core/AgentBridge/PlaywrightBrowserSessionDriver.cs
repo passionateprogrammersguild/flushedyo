@@ -8,11 +8,12 @@ namespace FlushedYo.Core.AgentBridge;
 /// Owns one isolated Chromium context over Playwright's default pipe transport. It exposes no raw
 /// browser object, persistent profile, artifact capture, script-evaluation operation, or listener.
 /// </summary>
-internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IBrowserSecurityStateSource
+internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IBrowserSecurityStateSource, IDisposable
 {
     private readonly ProviderBrowserPolicy _policy;
     private readonly AgentBridgeOptions _options;
     private readonly TimeProvider _timeProvider;
+    private readonly CancellationTokenSource _forceClose = new();
     private readonly object _abandonedTasksLock = new();
     private readonly List<Task> _abandonedTasks = [];
     private readonly Channel<BrowserEventCommand> _browserEvents =
@@ -35,6 +36,7 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
     private int _faulted;
     private int _started;
     private int _closed;
+    private int _disposed;
     private bool _closeFailed;
     private string _faultReason = "browser state";
 
@@ -152,6 +154,7 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
                         WaitUntil = WaitUntilState.Load,
                         Timeout = Milliseconds(_options.NavigationTimeout),
                     }),
+                _options.NavigationTimeout,
                 cancellationToken).ConfigureAwait(false);
             ThrowIfUnavailable();
         }
@@ -179,8 +182,12 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
 
     public Task SetDocumentNavigationFrozenAsync(bool frozen, CancellationToken cancellationToken = default)
     {
-        ThrowIfUnavailable();
-        cancellationToken.ThrowIfCancellationRequested();
+        if (frozen)
+        {
+            ThrowIfUnavailable();
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
         Interlocked.Exchange(ref _freezeDocumentNavigations, frozen ? 1 : 0);
         return Task.CompletedTask;
     }
@@ -190,13 +197,16 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         string secret,
         bool submit,
         Func<CancellationToken, Task> verifySecurityState,
+        Func<CancellationToken, Task> verifyAfterSubmit,
         CancellationToken cancellationToken = default)
     {
         ThrowIfUnavailable();
         IElementHandle? element = null;
+        var operationStep = "security verification";
         try
         {
             await verifySecurityState(cancellationToken).ConfigureAwait(false);
+            operationStep = "selector resolution";
             var elements = await AwaitBrowserTaskAsync(
                 RequiredPage().QuerySelectorAllAsync(cssSelector),
                 cancellationToken).ConfigureAwait(false);
@@ -206,19 +216,30 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
             }
 
             element = elements[0];
+            operationStep = "security verification";
             await verifySecurityState(cancellationToken).ConfigureAwait(false);
+            operationStep = "focus";
             await AwaitBrowserTaskAsync(element.FocusAsync(), cancellationToken).ConfigureAwait(false);
+            operationStep = "security verification";
             await verifySecurityState(cancellationToken).ConfigureAwait(false);
 
             await verifySecurityState(cancellationToken).ConfigureAwait(false);
+            operationStep = "fill";
             await AwaitBrowserTaskAsync(element.FillAsync(secret), cancellationToken).ConfigureAwait(false);
+            operationStep = "security verification";
             await verifySecurityState(cancellationToken).ConfigureAwait(false);
 
             if (submit)
             {
                 await verifySecurityState(cancellationToken).ConfigureAwait(false);
+                operationStep = "submission";
+                // Submission is the one document navigation the bridge itself initiates. Disallowed
+                // destinations are still aborted by the route policy, and the post-submit check
+                // requires the same target and frame at an allowed origin.
+                Interlocked.Exchange(ref _freezeDocumentNavigations, 0);
                 await AwaitBrowserTaskAsync(element.PressAsync("Enter"), cancellationToken).ConfigureAwait(false);
-                await verifySecurityState(cancellationToken).ConfigureAwait(false);
+                operationStep = "post-submit verification";
+                await verifyAfterSubmit(cancellationToken).ConfigureAwait(false);
             }
         }
         catch (OperationCanceledException)
@@ -234,7 +255,7 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         catch (Exception)
         {
             Fault("browser state");
-            throw new BridgeOperationException("The credential operation failed safely.");
+            throw new BridgeOperationException($"The credential {operationStep} failed safely.");
         }
         finally
         {
@@ -274,6 +295,7 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         finally
         {
             ForceClose();
+            Dispose();
         }
 
         if (_closeFailed)
@@ -286,11 +308,28 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
     {
         try
         {
+            if (Volatile.Read(ref _disposed) == 0)
+            {
+                _forceClose.Cancel();
+            }
+
             _playwright?.Dispose();
+        }
+        catch (ObjectDisposedException)
+        {
+            // A repeated force-close after teardown has nothing left to cancel.
         }
         catch (Exception)
         {
             _closeFailed = true;
+        }
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            _forceClose.Dispose();
         }
     }
 
@@ -319,7 +358,7 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
             IsTopLevelFrame = frame.ValueKind == JsonValueKind.Object && !frame.TryGetProperty("parentId", out _),
             NavigationHistoryUrl = ReadString(historyEntry, "url"),
             PageTargetCount = CountPageTargets(targetInfos),
-            TotalTargetCount = targetInfos.ValueKind == JsonValueKind.Array ? targetInfos.GetArrayLength() : -1,
+            TotalTargetCount = CountSecurityRelevantTargets(targetInfos),
             ContextPageCount = context.Pages.Count,
             IsOriginalPage = context.Pages.Count == 1 && ReferenceEquals(context.Pages[0], page),
             BrowserConnected = RequiredBrowser().IsConnected,
@@ -495,7 +534,11 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
     {
         try
         {
-            await task.ConfigureAwait(false);
+            await task.WaitAsync(_forceClose.Token).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (_forceClose.IsCancellationRequested)
+        {
+            // Forced close intentionally abandons the Playwright wait after disposing its transport.
         }
         catch (Exception)
         {
@@ -527,12 +570,18 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         return result ?? throw new BridgeSnapshotException("The browser returned no structured security metadata.");
     }
 
-    private async Task AwaitBrowserTaskAsync(Task task, CancellationToken cancellationToken)
+    private Task AwaitBrowserTaskAsync(Task task, CancellationToken cancellationToken) =>
+        AwaitBrowserTaskAsync(task, _options.ActionTimeout, cancellationToken);
+
+    private async Task AwaitBrowserTaskAsync(
+        Task task,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
-            await task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            await task.WaitAsync(timeout, _timeProvider, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception)
         {
@@ -541,12 +590,18 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         }
     }
 
-    private async Task<T> AwaitBrowserTaskAsync<T>(Task<T> task, CancellationToken cancellationToken)
+    private Task<T> AwaitBrowserTaskAsync<T>(Task<T> task, CancellationToken cancellationToken) =>
+        AwaitBrowserTaskAsync(task, _options.ActionTimeout, cancellationToken);
+
+    private async Task<T> AwaitBrowserTaskAsync<T>(
+        Task<T> task,
+        TimeSpan timeout,
+        CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         try
         {
-            return await task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            return await task.WaitAsync(timeout, _timeProvider, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception)
         {
@@ -661,6 +716,25 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         foreach (var target in targets.EnumerateArray())
         {
             if (ReadString(target, "type") == "page")
+            {
+                count++;
+            }
+        }
+
+        return count;
+    }
+
+    private static int CountSecurityRelevantTargets(JsonElement targets)
+    {
+        if (targets.ValueKind != JsonValueKind.Array)
+        {
+            return -1;
+        }
+
+        var count = 0;
+        foreach (var target in targets.EnumerateArray())
+        {
+            if (ReadString(target, "type") != "browser")
             {
                 count++;
             }

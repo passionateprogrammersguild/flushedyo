@@ -65,7 +65,7 @@ public sealed class TrustedBrowserBridgeCredentialTests
     }
 
     [Fact]
-    public async Task RedirectAfterSubmit_FaultsAndClosesSession()
+    public async Task SameOriginNewDocumentAfterSubmit_Succeeds()
     {
         using var harness = new BridgeTestHarness();
         var expected = harness.Driver.CurrentSnapshot;
@@ -74,6 +74,29 @@ public sealed class TrustedBrowserBridgeCredentialTests
             if (stage == "submit")
             {
                 harness.Driver.CurrentSnapshot = Snapshot(loaderId: "loader-2", securityVersion: 2);
+            }
+
+            return Task.CompletedTask;
+        };
+
+        await harness.Bridge.SubmitCredentialAsync("website/password", "#password", expected, Token);
+
+        Assert.Equal(["focus", "fill", "submit"], harness.Driver.DomSteps);
+        Assert.False(harness.Driver.Closed);
+    }
+
+    [Theory]
+    [InlineData("https://evil.example:443", "target-1")]
+    [InlineData("https://example.com:443", "target-2")]
+    public async Task DisallowedOriginOrTargetSwapAfterSubmit_FaultsAndClosesSession(string origin, string targetId)
+    {
+        using var harness = new BridgeTestHarness();
+        var expected = harness.Driver.CurrentSnapshot;
+        harness.Driver.StageHook = (stage, _) =>
+        {
+            if (stage == "submit")
+            {
+                harness.Driver.CurrentSnapshot = Snapshot(targetId: targetId, origin: origin, loaderId: "loader-2", securityVersion: 2);
             }
 
             return Task.CompletedTask;
@@ -288,6 +311,7 @@ internal sealed class FakeBrowserSessionDriver : IBrowserSessionDriver
         string secret,
         bool submit,
         Func<CancellationToken, Task> verifySecurityState,
+        Func<CancellationToken, Task> verifyAfterSubmit,
         CancellationToken cancellationToken = default)
     {
         await Verify(verifySecurityState, cancellationToken);
@@ -301,7 +325,14 @@ internal sealed class FakeBrowserSessionDriver : IBrowserSessionDriver
         await Step("fill", verifySecurityState, cancellationToken);
         if (submit)
         {
-            await Step("submit", verifySecurityState, cancellationToken);
+            await Verify(verifySecurityState, cancellationToken);
+            DomSteps.Add("submit");
+            if (StageHook is not null)
+            {
+                await StageHook("submit", cancellationToken);
+            }
+
+            await Verify(verifyAfterSubmit, cancellationToken);
         }
     }
 

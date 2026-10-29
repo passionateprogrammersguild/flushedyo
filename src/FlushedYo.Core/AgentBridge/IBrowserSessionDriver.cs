@@ -21,6 +21,7 @@ internal interface IBrowserSessionDriver
         string secret,
         bool submit,
         Func<CancellationToken, Task> verifySecurityState,
+        Func<CancellationToken, Task> verifyAfterSubmit,
         CancellationToken cancellationToken = default);
 
     Task CloseAsync(CancellationToken cancellationToken = default);

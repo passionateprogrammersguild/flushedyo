@@ -19,16 +19,25 @@ public sealed class SyntheticLoginFlowTests
         var submitted = site.SignalWhenRequested("/submit");
         site.MapHtml("/login", """
             <!doctype html><title>Synthetic login</title>
-            <form id="login" onsubmit="event.preventDefault(); fetch('/submit', { method: 'POST', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams(new FormData(this)); });">
+            <form id="login" method="post" action="/submit">
               <input id="secret" name="secret" type="password"><button type="submit">Sign in</button>
             </form>
             """);
+        site.MapHtml("/submit", "<!doctype html><title>Submission received</title>");
         site.MapHtml("/post-login", "<!doctype html><title>Post login</title><p>Authenticated synthetic session</p>");
         await using var bridge = site.CreateBridge();
 
         await bridge.NavigateAsync(site.Url("/login"), Token);
         var snapshot = await bridge.GetSecuritySnapshotAsync(Token);
-        await bridge.SubmitCredentialAsync("synthetic/password", "#secret", snapshot, Token);
+        try
+        {
+            await bridge.SubmitCredentialAsync("synthetic/password", "#secret", snapshot, Token);
+        }
+        catch (BridgeException)
+        {
+            Assert.Fail($"Synthetic submission failed; requests={site.RequestCounts.Count}, parsed={site.FormSecrets.Count}, submitted={submitted.IsCompleted}.");
+        }
+
         await submitted.WaitAsync(Token);
         await bridge.NavigateAsync(site.Url("/post-login"), Token);
         var postLogin = await bridge.GetSecuritySnapshotAsync(Token);
