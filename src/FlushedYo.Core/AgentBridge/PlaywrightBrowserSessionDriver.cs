@@ -377,21 +377,21 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         try
         {
             var request = route.Request;
-            var isDocument = request.ResourceType == "document";
-            var frozen = isDocument && Volatile.Read(ref _freezeDocumentNavigations) != 0;
-            var disallowed = isDocument &&
-                             (!Uri.TryCreate(request.Url, UriKind.Absolute, out var requestUrl) || !_policy.IsAllowed(requestUrl));
-            var pin = _submitOriginPin;
-            var offPin = isDocument && pin is not null && !disallowed &&
-                         !string.Equals(_policy.GetOrigin(new Uri(request.Url)), pin, StringComparison.Ordinal);
-            if (frozen || disallowed || offPin)
+            var decision = NavigationRequestClassifier.Classify(
+                new NavigationRequest(
+                    request.ResourceType,
+                    request.Url,
+                    _submitOriginPin,
+                    Volatile.Read(ref _freezeDocumentNavigations) != 0),
+                _policy);
+            if (!decision.IsAbort)
             {
-                Fault("blocked document request");
-                await route.AbortAsync("BlockedByClient").ConfigureAwait(false);
+                await route.ContinueAsync().ConfigureAwait(false);
                 return;
             }
 
-            await route.ContinueAsync().ConfigureAwait(false);
+            Fault(decision.FaultCategory);
+            await route.AbortAsync("BlockedByClient").ConfigureAwait(false);
         }
         catch (Exception)
         {
