@@ -81,8 +81,7 @@ internal sealed class BrowserSecuritySnapshotReader
 {
     private const int MaximumAttempts = 4;
     private readonly IBrowserSecurityStateSource _source;
-    private readonly ProviderBrowserPolicy _policy;
-    private readonly string _originalTargetId;
+    private readonly BrowserSnapshotValidator _validator;
 
     internal BrowserSecuritySnapshotReader(
         IBrowserSecurityStateSource source,
@@ -90,8 +89,7 @@ internal sealed class BrowserSecuritySnapshotReader
         string originalTargetId)
     {
         _source = source;
-        _policy = policy;
-        _originalTargetId = originalTargetId;
+        _validator = new BrowserSnapshotValidator(policy, originalTargetId);
     }
 
     internal async Task<BrowserSecuritySnapshot> ReadAsync(CancellationToken cancellationToken = default)
@@ -132,45 +130,22 @@ internal sealed class BrowserSecuritySnapshotReader
 
     private BrowserSecuritySnapshot CrossCheck(BrowserSecurityState state, long securityVersion)
     {
-        if (string.IsNullOrEmpty(state.TargetId) ||
-            state.TargetType != "page" ||
-            string.IsNullOrEmpty(state.TargetUrl) ||
-            string.IsNullOrEmpty(state.TopLevelFrameId) ||
-            string.IsNullOrEmpty(state.LoaderId) ||
-            string.IsNullOrEmpty(state.FrameUrl) ||
-            string.IsNullOrEmpty(state.SecurityOrigin) ||
-            string.IsNullOrEmpty(state.NavigationHistoryUrl) ||
-            !state.IsTopLevelFrame ||
-            state.PageTargetCount != 1 ||
-            state.TotalTargetCount != 1 ||
-            state.ContextPageCount != 1 ||
-            !state.IsOriginalPage ||
-            !state.BrowserConnected ||
-            state.PageClosed ||
-            !string.Equals(state.TargetId, _originalTargetId, StringComparison.Ordinal) ||
-            !string.Equals(state.TargetUrl, state.FrameUrl, StringComparison.Ordinal) ||
-            !string.Equals(state.NavigationHistoryUrl, state.FrameUrl, StringComparison.Ordinal))
+        var validation = _validator.Validate(state);
+        if (validation.Violation != SnapshotViolation.None)
         {
-            throw new BridgeSnapshotException("The browser target, frame, or navigation identity is ambiguous.");
-        }
-
-        if (!Uri.TryCreate(state.FrameUrl, UriKind.Absolute, out var documentUrl) ||
-            !Uri.TryCreate(state.SecurityOrigin, UriKind.Absolute, out var securityOrigin) ||
-            !_policy.IsAllowed(documentUrl) ||
-            !_policy.IsAllowed(securityOrigin) ||
-            !string.Equals(
-                ProviderBrowserPolicy.OriginKey(documentUrl),
-                ProviderBrowserPolicy.OriginKey(securityOrigin),
-                StringComparison.Ordinal))
-        {
-            throw new BridgePolicyException("The committed browser origin is missing, inconsistent, or not allowed.");
+            throw FailureFor(validation.Violation);
         }
 
         return new BrowserSecuritySnapshot(
-            state.TargetId,
-            state.TopLevelFrameId,
-            state.LoaderId,
-            ProviderBrowserPolicy.OriginKey(documentUrl),
+            validation.Identity.TargetId,
+            validation.Identity.TopLevelFrameId,
+            validation.Identity.LoaderId,
+            validation.Identity.OriginKey,
             securityVersion);
     }
+
+    private static BridgeException FailureFor(SnapshotViolation violation) =>
+        violation == SnapshotViolation.OriginIdentity
+            ? new BridgePolicyException("The committed browser origin is missing, inconsistent, or not allowed.")
+            : new BridgeSnapshotException("The browser target, frame, or navigation identity is ambiguous.");
 }
