@@ -187,50 +187,11 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         CancellationToken cancellationToken = default)
     {
         ThrowIfUnavailable();
-        IElementHandle? element = null;
-        var operationStep = "security verification";
+        var operation = new CredentialEntryOperation(
+            new CredentialEntryPlan(cssSelector, submit, verifySecurityState, verifyAfterSubmit));
         try
         {
-            await verifySecurityState(cancellationToken).ConfigureAwait(false);
-            operationStep = "selector resolution";
-            var elements = await AwaitBrowserTaskAsync(
-                RequiredPage().QuerySelectorAllAsync(cssSelector),
-                cancellationToken).ConfigureAwait(false);
-            if (elements.Count != 1)
-            {
-                throw new BridgeOperationException("The configured credential control is missing or ambiguous.");
-            }
-
-            element = elements[0];
-            operationStep = "security verification";
-            await verifySecurityState(cancellationToken).ConfigureAwait(false);
-            operationStep = "focus";
-            await AwaitBrowserTaskAsync(element.FocusAsync(), cancellationToken).ConfigureAwait(false);
-            operationStep = "security verification";
-            await verifySecurityState(cancellationToken).ConfigureAwait(false);
-
-            await verifySecurityState(cancellationToken).ConfigureAwait(false);
-            operationStep = "fill";
-            await AwaitBrowserTaskAsync(element.FillAsync(secret), cancellationToken).ConfigureAwait(false);
-            operationStep = "security verification";
-            await verifySecurityState(cancellationToken).ConfigureAwait(false);
-
-            if (submit)
-            {
-                await verifySecurityState(cancellationToken).ConfigureAwait(false);
-                operationStep = "submission";
-                // Submission is the one document navigation the bridge itself initiates. Disallowed
-                // destinations are still aborted by the route policy, and the post-submit check
-                // requires the same target and frame at an allowed origin.
-                // While the submission is in flight only the verified origin may receive the document
-                // request, so a retargeted form action cannot deliver the secret to a second allowed origin.
-                _submitOriginPin = (await GetSecuritySnapshotAsync(cancellationToken).ConfigureAwait(false)).Origin;
-                Interlocked.Exchange(ref _freezeDocumentNavigations, 0);
-                await AwaitBrowserTaskAsync(element.PressAsync("Enter"), cancellationToken).ConfigureAwait(false);
-                _submitOriginPin = null;
-                operationStep = "post-submit verification";
-                await verifyAfterSubmit(cancellationToken).ConfigureAwait(false);
-            }
+            await RunCredentialStepsAsync(operation, secret, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException)
         {
@@ -245,22 +206,95 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         catch (Exception)
         {
             Fault("browser state");
-            throw new BridgeOperationException($"The credential {operationStep} failed safely ({_faultReason}).");
+            throw new BridgeOperationException($"The credential {operation.Step} failed safely ({_faultReason}).");
         }
         finally
         {
             _submitOriginPin = null;
-            if (element is not null)
-            {
-                try
-                {
-                    await element.DisposeAsync().ConfigureAwait(false);
-                }
-                catch (Exception)
-                {
-                    Fault("browser state");
-                }
-            }
+            await DisposeElementAsync(operation).ConfigureAwait(false);
+        }
+    }
+
+    private async Task RunCredentialStepsAsync(
+        CredentialEntryOperation operation,
+        string secret,
+        CancellationToken cancellationToken)
+    {
+        await operation.VerifySecurityStateAsync(cancellationToken).ConfigureAwait(false);
+        operation.Element = await ResolveUniqueElementAsync(operation, cancellationToken).ConfigureAwait(false);
+        await operation.VerifySecurityStateAsync(cancellationToken).ConfigureAwait(false);
+        await FocusAsync(operation, cancellationToken).ConfigureAwait(false);
+        await operation.VerifySecurityStateAsync(cancellationToken).ConfigureAwait(false);
+        await FillAsync(operation, secret, cancellationToken).ConfigureAwait(false);
+        if (operation.Plan.Submit)
+        {
+            await SubmitAsync(operation, cancellationToken).ConfigureAwait(false);
+            await operation.VerifyAfterSubmitAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    private async Task<IElementHandle> ResolveUniqueElementAsync(
+        CredentialEntryOperation operation,
+        CancellationToken cancellationToken)
+    {
+        operation.Step = "selector resolution";
+        var elements = await AwaitBrowserTaskAsync(
+            RequiredPage().QuerySelectorAllAsync(operation.Plan.CssSelector),
+            cancellationToken).ConfigureAwait(false);
+        if (elements.Count != 1)
+        {
+            throw new BridgeOperationException("The configured credential control is missing or ambiguous.");
+        }
+
+        return elements[0];
+    }
+
+    private async Task FocusAsync(CredentialEntryOperation operation, CancellationToken cancellationToken)
+    {
+        operation.Step = "focus";
+        await AwaitBrowserTaskAsync(RequiredElement(operation).FocusAsync(), cancellationToken).ConfigureAwait(false);
+        await operation.VerifySecurityStateAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task FillAsync(
+        CredentialEntryOperation operation,
+        string secret,
+        CancellationToken cancellationToken)
+    {
+        operation.Step = "fill";
+        await AwaitBrowserTaskAsync(RequiredElement(operation).FillAsync(secret), cancellationToken).ConfigureAwait(false);
+        await operation.VerifySecurityStateAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task SubmitAsync(CredentialEntryOperation operation, CancellationToken cancellationToken)
+    {
+        await operation.VerifySecurityStateAsync(cancellationToken).ConfigureAwait(false);
+        operation.Step = "submission";
+        // Submission is the one document navigation the bridge itself initiates. Disallowed
+        // destinations are still aborted by the route policy, and the post-submit check
+        // requires the same target and frame at an allowed origin.
+        // While the submission is in flight only the verified origin may receive the document
+        // request, so a retargeted form action cannot deliver the secret to a second allowed origin.
+        _submitOriginPin = (await GetSecuritySnapshotAsync(cancellationToken).ConfigureAwait(false)).Origin;
+        Interlocked.Exchange(ref _freezeDocumentNavigations, 0);
+        await AwaitBrowserTaskAsync(RequiredElement(operation).PressAsync("Enter"), cancellationToken).ConfigureAwait(false);
+        _submitOriginPin = null;
+    }
+
+    private async Task DisposeElementAsync(CredentialEntryOperation operation)
+    {
+        if (operation.Element is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await operation.Element.DisposeAsync().ConfigureAwait(false);
+        }
+        catch (Exception)
+        {
+            Fault("browser state");
         }
     }
 
@@ -661,6 +695,9 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
     private IBrowserContext RequiredContext() => _context ?? throw new BridgeOperationException("The browser context is not started.");
 
     private IPage RequiredPage() => _page ?? throw new BridgeOperationException("The browser page is not started.");
+
+    private static IElementHandle RequiredElement(CredentialEntryOperation operation) =>
+        operation.Element ?? throw new BridgeOperationException("The credential control is no longer available.");
 
     private ICDPSession RequiredCdp() => _cdp ?? throw new BridgeOperationException("The browser security channel is not started.");
 
