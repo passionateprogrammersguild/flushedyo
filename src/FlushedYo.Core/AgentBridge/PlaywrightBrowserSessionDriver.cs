@@ -1,4 +1,3 @@
-using System.Text.Json;
 using System.Threading.Channels;
 using Microsoft.Playwright;
 
@@ -8,7 +7,7 @@ namespace FlushedYo.Core.AgentBridge;
 /// Owns one isolated Chromium context over Playwright's default pipe transport. It exposes no raw
 /// browser object, persistent profile, artifact capture, script-evaluation operation, or listener.
 /// </summary>
-internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IBrowserSecurityStateSource, IDisposable
+internal sealed partial class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IBrowserSecurityStateSource, IDisposable
 {
     private readonly ProviderBrowserPolicy _policy;
     private readonly AgentBridgeOptions _options;
@@ -64,7 +63,12 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
 
     public async Task StartAsync(CancellationToken cancellationToken = default)
     {
-        RejectPlaywrightDebugLogging();
+        if (IsPlaywrightDebugLoggingEnabled())
+        {
+            throw new BridgeOperationException(
+                "Playwright debug logging is enabled and could record credentials; unset PWDEBUG and DEBUG.");
+        }
+
         if (Interlocked.Exchange(ref _started, 1) != 0)
         {
             throw new BridgeOperationException("The isolated browser session has already been started.");
@@ -95,9 +99,9 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
                 cancellationToken).ConfigureAwait(false);
 
             var target = await SendAsync("Target.getTargetInfo", parameters: null, cancellationToken).ConfigureAwait(false);
-            _originalTargetId = ReadString(target, "targetInfo", "targetId");
+            _originalTargetId = ReadString(ReadProperty(target, "targetInfo"), "targetId");
             if (string.IsNullOrEmpty(_originalTargetId) ||
-                ReadString(target, "targetInfo", "type") != "page")
+                ReadString(ReadProperty(target, "targetInfo"), "type") != "page")
             {
                 throw new BridgeSnapshotException("The initial browser target is ambiguous.");
             }
@@ -118,183 +122,6 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
 
             throw new BridgeOperationException(
                 "Chromium could not be started safely. Install the Playwright Chromium browser or configure AgentBridge:BrowserExecutablePath with AllowBrowserExecutableOverride.");
-        }
-    }
-
-    public async Task NavigateAsync(Uri destination, CancellationToken cancellationToken = default)
-    {
-        ThrowIfUnavailable();
-        if (!_policy.IsAllowed(destination))
-        {
-            Fault("browser state");
-            throw new BridgePolicyException("The browser destination origin is not allowed.");
-        }
-
-        try
-        {
-            await AwaitBrowserTaskAsync(
-                RequiredPage().GotoAsync(
-                    destination.AbsoluteUri,
-                    new PageGotoOptions
-                    {
-                        WaitUntil = WaitUntilState.Load,
-                        Timeout = Milliseconds(_options.NavigationTimeout),
-                    }),
-                _options.NavigationTimeout,
-                cancellationToken).ConfigureAwait(false);
-            ThrowIfUnavailable();
-        }
-        catch (OperationCanceledException)
-        {
-            throw;
-        }
-        catch (BridgeException)
-        {
-            Fault("browser state");
-            throw;
-        }
-        catch (Exception)
-        {
-            Fault("browser state");
-            throw new BridgeOperationException("The browser navigation failed or was blocked.");
-        }
-    }
-
-    public Task<BrowserSecuritySnapshot> GetSecuritySnapshotAsync(CancellationToken cancellationToken = default)
-    {
-        ThrowIfUnavailable();
-        return RequiredSnapshotReader().ReadAsync(cancellationToken);
-    }
-
-    public Task SetDocumentNavigationFrozenAsync(bool frozen, CancellationToken cancellationToken = default)
-    {
-        if (frozen)
-        {
-            ThrowIfUnavailable();
-            cancellationToken.ThrowIfCancellationRequested();
-        }
-
-        Interlocked.Exchange(ref _freezeDocumentNavigations, frozen ? 1 : 0);
-        return Task.CompletedTask;
-    }
-
-    public async Task EnterCredentialAsync(
-        string cssSelector,
-        string secret,
-        bool submit,
-        Func<CancellationToken, Task> verifySecurityState,
-        Func<CancellationToken, Task> verifyAfterSubmit,
-        CancellationToken cancellationToken = default)
-    {
-        ThrowIfUnavailable();
-        var operation = new CredentialEntryOperation(
-            new CredentialEntryPlan(cssSelector, submit, verifySecurityState, verifyAfterSubmit));
-        try
-        {
-            await RunCredentialStepsAsync(operation, secret, cancellationToken).ConfigureAwait(false);
-        }
-        catch (OperationCanceledException)
-        {
-            Fault("browser state");
-            throw;
-        }
-        catch (BridgeException)
-        {
-            Fault("browser state");
-            throw;
-        }
-        catch (Exception)
-        {
-            Fault("browser state");
-            throw new BridgeOperationException($"The credential {operation.Step} failed safely ({_faultReason}).");
-        }
-        finally
-        {
-            _submitOriginPin = null;
-            await DisposeElementAsync(operation).ConfigureAwait(false);
-        }
-    }
-
-    private async Task RunCredentialStepsAsync(
-        CredentialEntryOperation operation,
-        string secret,
-        CancellationToken cancellationToken)
-    {
-        await operation.VerifySecurityStateAsync(cancellationToken).ConfigureAwait(false);
-        operation.Element = await ResolveUniqueElementAsync(operation, cancellationToken).ConfigureAwait(false);
-        await operation.VerifySecurityStateAsync(cancellationToken).ConfigureAwait(false);
-        await FocusAsync(operation, cancellationToken).ConfigureAwait(false);
-        await operation.VerifySecurityStateAsync(cancellationToken).ConfigureAwait(false);
-        await FillAsync(operation, secret, cancellationToken).ConfigureAwait(false);
-        if (operation.Plan.Submit)
-        {
-            await SubmitAsync(operation, cancellationToken).ConfigureAwait(false);
-            await operation.VerifyAfterSubmitAsync(cancellationToken).ConfigureAwait(false);
-        }
-    }
-
-    private async Task<IElementHandle> ResolveUniqueElementAsync(
-        CredentialEntryOperation operation,
-        CancellationToken cancellationToken)
-    {
-        operation.Step = "selector resolution";
-        var elements = await AwaitBrowserTaskAsync(
-            RequiredPage().QuerySelectorAllAsync(operation.Plan.CssSelector),
-            cancellationToken).ConfigureAwait(false);
-        if (elements.Count != 1)
-        {
-            throw new BridgeOperationException("The configured credential control is missing or ambiguous.");
-        }
-
-        return elements[0];
-    }
-
-    private async Task FocusAsync(CredentialEntryOperation operation, CancellationToken cancellationToken)
-    {
-        operation.Step = "focus";
-        await AwaitBrowserTaskAsync(RequiredElement(operation).FocusAsync(), cancellationToken).ConfigureAwait(false);
-        await operation.VerifySecurityStateAsync(cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task FillAsync(
-        CredentialEntryOperation operation,
-        string secret,
-        CancellationToken cancellationToken)
-    {
-        operation.Step = "fill";
-        await AwaitBrowserTaskAsync(RequiredElement(operation).FillAsync(secret), cancellationToken).ConfigureAwait(false);
-        await operation.VerifySecurityStateAsync(cancellationToken).ConfigureAwait(false);
-    }
-
-    private async Task SubmitAsync(CredentialEntryOperation operation, CancellationToken cancellationToken)
-    {
-        await operation.VerifySecurityStateAsync(cancellationToken).ConfigureAwait(false);
-        operation.Step = "submission";
-        // Submission is the one document navigation the bridge itself initiates. Disallowed
-        // destinations are still aborted by the route policy, and the post-submit check
-        // requires the same target and frame at an allowed origin.
-        // While the submission is in flight only the verified origin may receive the document
-        // request, so a retargeted form action cannot deliver the secret to a second allowed origin.
-        _submitOriginPin = (await GetSecuritySnapshotAsync(cancellationToken).ConfigureAwait(false)).Origin;
-        Interlocked.Exchange(ref _freezeDocumentNavigations, 0);
-        await AwaitBrowserTaskAsync(RequiredElement(operation).PressAsync("Enter"), cancellationToken).ConfigureAwait(false);
-        _submitOriginPin = null;
-    }
-
-    private async Task DisposeElementAsync(CredentialEntryOperation operation)
-    {
-        if (operation.Element is null)
-        {
-            return;
-        }
-
-        try
-        {
-            await operation.Element.DisposeAsync().ConfigureAwait(false);
-        }
-        catch (Exception)
-        {
-            Fault("browser state");
         }
     }
 
@@ -358,182 +185,20 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         }
     }
 
-    async Task<BrowserSecurityState> IBrowserSecurityStateSource.ReadAsync(CancellationToken cancellationToken)
-    {
-        var target = await SendAsync("Target.getTargetInfo", parameters: null, cancellationToken).ConfigureAwait(false);
-        var tree = await SendAsync("Page.getFrameTree", parameters: null, cancellationToken).ConfigureAwait(false);
-        var history = await SendAsync("Page.getNavigationHistory", parameters: null, cancellationToken).ConfigureAwait(false);
-        var targets = await SendAsync("Target.getTargets", parameters: null, cancellationToken).ConfigureAwait(false);
-
-        var frame = ReadProperty(ReadProperty(tree, "frameTree"), "frame");
-        var historyEntry = ReadCurrentHistoryEntry(history);
-        var targetInfos = ReadProperty(targets, "targetInfos");
-        var context = RequiredContext();
-        var page = RequiredPage();
-
-        return new BrowserSecurityState
-        {
-            TargetId = ReadString(target, "targetInfo", "targetId"),
-            TargetType = ReadString(target, "targetInfo", "type"),
-            TargetUrl = ReadString(target, "targetInfo", "url"),
-            TopLevelFrameId = ReadString(frame, "id"),
-            LoaderId = ReadString(frame, "loaderId"),
-            FrameUrl = ReadString(frame, "url"),
-            SecurityOrigin = ReadString(frame, "securityOrigin"),
-            IsTopLevelFrame = frame.ValueKind == JsonValueKind.Object && !frame.TryGetProperty("parentId", out _),
-            NavigationHistoryUrl = ReadString(historyEntry, "url"),
-            PageTargetCount = CountPageTargets(targetInfos),
-            TotalTargetCount = CountSecurityRelevantTargets(targetInfos),
-            ContextPageCount = context.Pages.Count,
-            IsOriginalPage = context.Pages.Count == 1 && ReferenceEquals(context.Pages[0], page),
-            BrowserConnected = RequiredBrowser().IsConnected,
-            PageClosed = page.IsClosed,
-        };
-    }
-
     // Playwright's in-process API logging (DEBUG=pw:api) records every call argument, including the
     // value passed to fill; PWDEBUG also attaches the inspector. Neither is acceptable around credentials.
-    private static void RejectPlaywrightDebugLogging()
+    private static bool IsPlaywrightDebugLoggingEnabled() =>
+        !string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PWDEBUG")) ||
+        RequestsPlaywrightApiLogging(Environment.GetEnvironmentVariable("DEBUG"));
+
+    private static bool RequestsPlaywrightApiLogging(string? debug)
     {
-        var debug = Environment.GetEnvironmentVariable("DEBUG");
-        if (!string.IsNullOrEmpty(Environment.GetEnvironmentVariable("PWDEBUG")) ||
-            (!string.IsNullOrEmpty(debug) &&
-             (debug.Contains("pw:", StringComparison.OrdinalIgnoreCase) || debug.Contains('*', StringComparison.Ordinal))))
+        if (string.IsNullOrEmpty(debug))
         {
-            throw new BridgeOperationException(
-                "Playwright debug logging is enabled and could record credentials; unset PWDEBUG and DEBUG.");
-        }
-    }
-
-    private async Task RouteAsync(IRoute route)
-    {
-        ChangeSecurityState();
-        try
-        {
-            var request = route.Request;
-            var decision = NavigationRequestClassifier.Classify(
-                new NavigationRequest(
-                    request.ResourceType,
-                    request.Url,
-                    _submitOriginPin,
-                    Volatile.Read(ref _freezeDocumentNavigations) != 0),
-                _policy);
-            if (!decision.IsAbort)
-            {
-                await route.ContinueAsync().ConfigureAwait(false);
-                return;
-            }
-
-            Fault(decision.FaultCategory);
-            await route.AbortAsync("BlockedByClient").ConfigureAwait(false);
-        }
-        catch (Exception)
-        {
-            Fault("route failure");
-            try
-            {
-                await route.AbortAsync("BlockedByClient").ConfigureAwait(false);
-            }
-            catch (Exception)
-            {
-                // The protected operation observes the fault; browser diagnostics never escape.
-            }
-        }
-    }
-
-    private void SubscribeToSecurityEvents()
-    {
-        RequiredBrowser().Disconnected += (_, _) => Fault("browser disconnected");
-        RequiredContext().Page += (_, page) =>
-        {
-            ChangeSecurityState();
-            if (!ReferenceEquals(page, _page))
-            {
-                Fault("additional page");
-                Enqueue(BrowserEventCommand.ForPage(page));
-            }
-        };
-
-        var page = RequiredPage();
-        page.Crash += (_, _) => Fault("page crash");
-        page.Close += (_, _) =>
-        {
-            if (Volatile.Read(ref _closed) == 0)
-            {
-                Fault("page closed");
-            }
-        };
-        page.FrameNavigated += (_, _) => ChangeSecurityState();
-        page.FrameAttached += (_, _) => ChangeSecurityState();
-        page.FrameDetached += (_, _) => ChangeSecurityState();
-
-        var cdp = RequiredCdp();
-        cdp.Event("Page.frameNavigated").OnEvent += (_, _) => ChangeSecurityState();
-        cdp.Event("Page.frameDetached").OnEvent += (_, _) => ChangeSecurityState();
-        cdp.Event("Target.targetCreated").OnEvent += (_, data) => OnTargetCreated(data);
-        cdp.Event("Target.targetInfoChanged").OnEvent += (_, _) => ChangeSecurityState();
-        cdp.Event("Target.targetDestroyed").OnEvent += (_, _) => ChangeSecurityState();
-    }
-
-    private void OnTargetCreated(JsonElement? data)
-    {
-        ChangeSecurityState();
-        if (data is not { ValueKind: JsonValueKind.Object } payload)
-        {
-            Fault("invalid target event");
-            return;
+            return false;
         }
 
-        var targetId = ReadString(payload, "targetInfo", "targetId");
-        var targetType = ReadString(payload, "targetInfo", "type");
-        if (string.IsNullOrEmpty(targetId) || string.IsNullOrEmpty(targetType))
-        {
-            Fault("incomplete target event");
-            return;
-        }
-
-        if (targetType == "browser")
-        {
-            return;
-        }
-
-        if (!string.Equals(targetId, _originalTargetId, StringComparison.Ordinal))
-        {
-            Fault($"additional {targetType} target");
-            Enqueue(BrowserEventCommand.ForTarget(targetId));
-        }
-    }
-
-    private async Task ProcessBrowserEventsAsync()
-    {
-        await foreach (var command in _browserEvents.Reader.ReadAllAsync().ConfigureAwait(false))
-        {
-            try
-            {
-                if (command.Page is not null)
-                {
-                    await command.Page.CloseAsync().ConfigureAwait(false);
-                }
-                else if (command.TargetId is not null && _cdp is not null)
-                {
-                    await _cdp.SendAsync(
-                        "Target.closeTarget",
-                        new Dictionary<string, object> { ["targetId"] = command.TargetId }).ConfigureAwait(false);
-                }
-            }
-            catch (Exception)
-            {
-                Fault("browser state");
-            }
-        }
-    }
-
-    private void Enqueue(BrowserEventCommand command)
-    {
-        if (Volatile.Read(ref _closed) == 0 && !_browserEvents.Writer.TryWrite(command))
-        {
-            Fault("browser state");
-        }
+        return debug.Contains("pw:", StringComparison.OrdinalIgnoreCase) || debug.Contains('*', StringComparison.Ordinal);
     }
 
     private async Task CloseCoreAsync()
@@ -601,17 +266,6 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         }
     }
 
-    private async Task<JsonElement> SendAsync(
-        string method,
-        Dictionary<string, object>? parameters,
-        CancellationToken cancellationToken)
-    {
-        var result = await AwaitBrowserTaskAsync(
-            RequiredCdp().SendAsync(method, parameters),
-            cancellationToken).ConfigureAwait(false);
-        return result ?? throw new BridgeSnapshotException("The browser returned no structured security metadata.");
-    }
-
     private Task AwaitBrowserTaskAsync(Task task, CancellationToken cancellationToken) =>
         AwaitBrowserTaskAsync(task, _options.ActionTimeout, cancellationToken);
 
@@ -674,35 +328,13 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         }
     }
 
-    private void Fault(string reason)
-    {
-        lock (_faultLock)
-        {
-            if (Volatile.Read(ref _faulted) == 0)
-            {
-                _faultReason = reason;
-                Volatile.Write(ref _faulted, 1);
-            }
-        }
-
-        ChangeSecurityState();
-    }
-
-    private void ChangeSecurityState() => Interlocked.Increment(ref _securityVersion);
-
     private IBrowser RequiredBrowser() => _browser ?? throw new BridgeOperationException("The browser is not started.");
 
     private IBrowserContext RequiredContext() => _context ?? throw new BridgeOperationException("The browser context is not started.");
 
     private IPage RequiredPage() => _page ?? throw new BridgeOperationException("The browser page is not started.");
 
-    private static IElementHandle RequiredElement(CredentialEntryOperation operation) =>
-        operation.Element ?? throw new BridgeOperationException("The credential control is no longer available.");
-
     private ICDPSession RequiredCdp() => _cdp ?? throw new BridgeOperationException("The browser security channel is not started.");
-
-    private BrowserSecuritySnapshotReader RequiredSnapshotReader() =>
-        _snapshotReader ?? throw new BridgeOperationException("The browser snapshot reader is not started.");
 
     private static float Milliseconds(TimeSpan timeout) => (float)timeout.TotalMilliseconds;
 
@@ -751,78 +383,40 @@ internal sealed class PlaywrightBrowserSessionDriver : IBrowserSessionDriver, IB
         return environment;
     }
 
-    private static JsonElement ReadProperty(JsonElement element, string property) =>
-        element.ValueKind == JsonValueKind.Object && element.TryGetProperty(property, out var value)
-            ? value
-            : default;
-
-    private static string? ReadString(JsonElement element, string parent, string property) =>
-        ReadString(ReadProperty(element, parent), property);
-
-    private static string? ReadString(JsonElement element, string property)
+    public async Task EnterCredentialAsync(
+        string cssSelector,
+        string secret,
+        bool submit,
+        Func<CancellationToken, Task> verifySecurityState,
+        Func<CancellationToken, Task> verifyAfterSubmit,
+        CancellationToken cancellationToken = default)
     {
-        var value = ReadProperty(element, property);
-        return value.ValueKind == JsonValueKind.String ? value.GetString() : null;
-    }
-
-    private static JsonElement ReadCurrentHistoryEntry(JsonElement history)
-    {
-        var currentIndex = ReadProperty(history, "currentIndex");
-        var entries = ReadProperty(history, "entries");
-        if (currentIndex.ValueKind != JsonValueKind.Number ||
-            !currentIndex.TryGetInt32(out var index) ||
-            entries.ValueKind != JsonValueKind.Array ||
-            index < 0 ||
-            index >= entries.GetArrayLength())
+        ThrowIfUnavailable();
+        var operation = new CredentialEntryOperation(
+            new CredentialEntryPlan(cssSelector, submit, verifySecurityState, verifyAfterSubmit));
+        try
         {
-            return default;
+            await RunCredentialStepsAsync(operation, secret, cancellationToken).ConfigureAwait(false);
         }
-
-        return entries[index];
-    }
-
-    private static int CountPageTargets(JsonElement targets)
-    {
-        if (targets.ValueKind != JsonValueKind.Array)
+        catch (OperationCanceledException)
         {
-            return -1;
+            Fault("browser state");
+            throw;
         }
-
-        var count = 0;
-        foreach (var target in targets.EnumerateArray())
+        catch (BridgeException)
         {
-            if (ReadString(target, "type") == "page")
-            {
-                count++;
-            }
+            Fault("browser state");
+            throw;
         }
-
-        return count;
-    }
-
-    private static int CountSecurityRelevantTargets(JsonElement targets)
-    {
-        if (targets.ValueKind != JsonValueKind.Array)
+        catch (Exception)
         {
-            return -1;
+            Fault("browser state");
+            throw new BridgeOperationException($"The credential {operation.Step} failed safely ({_faultReason}).");
         }
-
-        var count = 0;
-        foreach (var target in targets.EnumerateArray())
+        finally
         {
-            if (ReadString(target, "type") != "browser")
-            {
-                count++;
-            }
+            _submitOriginPin = null;
+            await DisposeElementAsync(operation).ConfigureAwait(false);
         }
-
-        return count;
-    }
-
-    private sealed record BrowserEventCommand(IPage? Page, string? TargetId)
-    {
-        internal static BrowserEventCommand ForPage(IPage page) => new(page, null);
-
-        internal static BrowserEventCommand ForTarget(string targetId) => new(null, targetId);
     }
 }

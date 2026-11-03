@@ -100,7 +100,9 @@ public sealed partial class TrustedBrowserBridge : IAsyncDisposable
         string cssSelector,
         BrowserSecuritySnapshot expectedSnapshot,
         CancellationToken cancellationToken = default) =>
-        EnterCredentialCoreAsync(secretKey, cssSelector, expectedSnapshot, submit: false, cancellationToken);
+        EnterCredentialCoreAsync(
+            CredentialRequest.Create(secretKey, cssSelector, expectedSnapshot, submit: false),
+            cancellationToken);
 
     /// <summary>
     /// Retrieves a website credential internally, fills exactly one matching control, and submits its form.
@@ -111,7 +113,9 @@ public sealed partial class TrustedBrowserBridge : IAsyncDisposable
         string cssSelector,
         BrowserSecuritySnapshot expectedSnapshot,
         CancellationToken cancellationToken = default) =>
-        EnterCredentialCoreAsync(secretKey, cssSelector, expectedSnapshot, submit: true, cancellationToken);
+        EnterCredentialCoreAsync(
+            CredentialRequest.Create(secretKey, cssSelector, expectedSnapshot, submit: true),
+            cancellationToken);
 
     /// <summary>
     /// Waits without code collection or automatic MFA until the structured top-level origin reaches an
@@ -201,30 +205,17 @@ public sealed partial class TrustedBrowserBridge : IAsyncDisposable
     }
 
     private Task<bool> EnterCredentialCoreAsync(
-        string secretKey,
-        string cssSelector,
-        BrowserSecuritySnapshot expectedSnapshot,
-        bool submit,
+        CredentialRequest request,
         CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(secretKey))
-        {
-            throw new ArgumentException("A website secret key is required.", nameof(secretKey));
-        }
-
-        if (string.IsNullOrWhiteSpace(cssSelector))
-        {
-            throw new ArgumentException("A credential CSS selector is required.", nameof(cssSelector));
-        }
-
-        ArgumentNullException.ThrowIfNull(expectedSnapshot);
+        var expectation = new PostSubmitExpectation(request.ExpectedSnapshot);
         return RunOperationAsync(async token =>
         {
             await _driver.SetDocumentNavigationFrozenAsync(true, token).ConfigureAwait(false);
             try
             {
-                await VerifyExpectedSnapshotAsync(expectedSnapshot, token).ConfigureAwait(false);
-                string? secret = await _secretStore.GetSecretAsync(secretKey, token).ConfigureAwait(false);
+                await VerifyExpectedSnapshotAsync(request.ExpectedSnapshot, token).ConfigureAwait(false);
+                string? secret = await _secretStore.GetSecretAsync(request.SecretKey, token).ConfigureAwait(false);
                 if (secret is null)
                 {
                     throw new BridgeOperationException("The requested website credential is unavailable.");
@@ -233,11 +224,11 @@ public sealed partial class TrustedBrowserBridge : IAsyncDisposable
                 try
                 {
                     await _driver.EnterCredentialAsync(
-                        cssSelector,
+                        request.CssSelector,
                         secret,
-                        submit,
-                        token => VerifyExpectedSnapshotAsync(expectedSnapshot, token),
-                        token => VerifyPostSubmitSnapshotAsync(expectedSnapshot, token),
+                        request.Submit,
+                        token => VerifyExpectedSnapshotAsync(request.ExpectedSnapshot, token),
+                        token => VerifyPostSubmitSnapshotAsync(expectation, token),
                         token).ConfigureAwait(false);
                 }
                 finally
@@ -266,26 +257,40 @@ public sealed partial class TrustedBrowserBridge : IAsyncDisposable
     }
 
     private async Task VerifyPostSubmitSnapshotAsync(
-        BrowserSecuritySnapshot expectedSnapshot,
+        PostSubmitExpectation expectation,
         CancellationToken cancellationToken)
     {
         var actual = await _driver.GetSecuritySnapshotAsync(cancellationToken).ConfigureAwait(false);
-        if (!string.Equals(actual.TargetId, expectedSnapshot.TargetId, StringComparison.Ordinal) ||
-            !string.Equals(actual.TopLevelFrameId, expectedSnapshot.TopLevelFrameId, StringComparison.Ordinal) ||
-            !string.Equals(actual.Origin, expectedSnapshot.Origin, StringComparison.Ordinal) ||
-            !Uri.TryCreate(actual.Origin, UriKind.Absolute, out var origin) ||
-            !_policy.IsAllowed(origin))
+        if (!SatisfiesPostSubmitIdentity(expectation, actual))
         {
             throw new BridgeSnapshotException("The browser target or origin changed unexpectedly after submission.");
         }
 
         // A submission is only reported once a new document committed. A page that swallows the
         // keypress, or a same-document update, is not evidence that the form was submitted.
-        if (string.Equals(actual.LoaderId, expectedSnapshot.LoaderId, StringComparison.Ordinal))
+        if (!expectation.HasNewDocument(actual))
         {
             throw new BridgeOperationException("No document navigation was observed after submission.");
         }
     }
+
+    private bool SatisfiesPostSubmitIdentity(PostSubmitExpectation expectation, BrowserSecuritySnapshot actual)
+    {
+        if (!expectation.HasSameIdentity(actual))
+        {
+            return false;
+        }
+
+        if (!expectation.HasSameOrigin(actual))
+        {
+            return false;
+        }
+
+        return IsAllowedOrigin(actual.Origin);
+    }
+
+    private bool IsAllowedOrigin(string origin) =>
+        Uri.TryCreate(origin, UriKind.Absolute, out var allowed) && _policy.IsAllowed(allowed);
 
     private async Task EnsureStartedAsync(CancellationToken cancellationToken)
     {
