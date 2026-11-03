@@ -49,6 +49,34 @@ The unit-006 fallback clause was invoked, not skipped. `--cdp-endpoint` shares t
 - Real-browser tests need a local Chromium and auto-skip without one. The headed MFA variant was not exercised; MFA is tested headless with a scripted "user" transition.
 - Wiring vault-session acquisition (`NativeMasterPasswordReader`, salvaged) into the bridge is intentionally out of scope.
 
+## Code Health (unit 010, measured 2026-11-03 after the step-4 refactor, commits through `088f73e`)
+
+| File | Baseline 2026-10-29 | Score 2026-11-03 |
+|---|---|---|
+| `BrowserSecuritySnapshot.cs` | 7.0 | **10.0** |
+| `PlaywrightBrowserSessionDriver.cs` (+ partials) | 7.81 | **9.68 / 10.0 / 10.0 / 10.0** |
+| `TrustedBrowserBridge.cs` | 9.09 | **10.0** |
+
+All files meet the adjusted unit-010 gate (≥ 9.5). One residual finding, explicitly
+justified: `PlaywrightBrowserSessionDriver.cs` 9.68 carries "Excess Number of Function
+Arguments" on `EnterCredentialAsync` (6 args) — spec 010 step 3 mandates keeping that
+public driver signature so the hermetic fake needs no change; changing it would alter
+the driver contract. Accepted as a deliberate design decision, not debt.
+
+Fresh gate table (2026-11-03, worktree 008, head `088f73e`):
+
+| Check | Result |
+|---|---|
+| `dotnet build flushedyo.slnx` | 0 warnings |
+| `dotnet test --project tests/FlushedYo.Core.Tests` | 574 total, 573 passed, 1 skipped (pre-existing case-sensitive-filesystem skip) |
+| `dotnet test --project tests/FlushedYo.ArchitectureTests` | 15 passed |
+| `dotnet test --project tests/FlushedYo.IntegrationTests --filter "Category!=Live&Category!=Network"` | 113 passed |
+| Real-browser suite (`FullyQualifiedName~Browser`) | 15 passed, 0 skipped — **two consecutive passes** (pass 1 and pass 2) |
+| `dotnet format flushedyo.slnx --verify-no-changes` | exit 0 |
+
+CodeScene `pre_commit_code_health_safeguard` on the step-4 diff: passed
+(driver + bridge both "improved", zero degradations).
+
 ## Absence criteria (grep over `src/FlushedYo.Core/AgentBridge/`)
 
 No matches for: `cdp-endpoint`, `remote-endpoint`, `remote-debugging-port`, `ModelContextProtocol`, `playwright/mcp`, `connectOverCDP`, `LaunchServer`, `Regex`, `TitleAsync`, `InnerText`, `TextContent`, `ContentAsync`, `EvaluateAsync`, `Screenshot`, `StartTracing`, `RecordHar`, `RecordVideo`. `NoEndpointTests` additionally inspects live Chromium command lines (`--remote-debugging-pipe` present; no `--remote-debugging-port`/`-address`) and asserts no browser process holds a TCP listener.
