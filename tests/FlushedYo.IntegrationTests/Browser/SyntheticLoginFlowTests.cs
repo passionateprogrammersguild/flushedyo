@@ -199,6 +199,18 @@ internal sealed class SyntheticSite : IAsyncDisposable
         return gate;
     }
 
+    /// <summary>Maps a synthetic export endpoint that answers with an attachment.</summary>
+    internal void MapDownload(string path, DownloadResponse response) => _handlers[path] = async context =>
+    {
+        var bytes = Encoding.UTF8.GetBytes(response.Content);
+        context.Response.StatusCode = (int)HttpStatusCode.OK;
+        context.Response.ContentType = "text/csv";
+        context.Response.AddHeader("Content-Disposition", $"attachment; filename={response.FileName}");
+        context.Response.ContentLength64 = bytes.Length;
+        await context.Response.OutputStream.WriteAsync(bytes, _lifetime.Token);
+        context.Response.Close();
+    };
+
     internal void MapRedirect(string path, Uri destination) => _handlers[path] = context =>
     {
         context.Response.StatusCode = (int)HttpStatusCode.Redirect;
@@ -315,6 +327,9 @@ internal sealed class SyntheticSite : IAsyncDisposable
         return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 }
+
+/// <summary>One synthetic attachment: the browser-suggested file name and the bytes served.</summary>
+internal readonly record struct DownloadResponse(string FileName, string Content);
 
 internal sealed class InMemorySecretStore(IReadOnlyDictionary<string, string> secrets) : ISecretStore
 {

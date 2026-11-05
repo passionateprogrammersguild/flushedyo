@@ -270,6 +270,7 @@ internal sealed class BridgeTestHarness : IDisposable
         Secrets = new FakeSecretStore(secretValue);
         Logger = new CapturingLogger<TrustedBrowserBridge>();
         Bridge = new TrustedBrowserBridge(Driver, Options, Secrets, Logger, timeProvider);
+        Directory = System.IO.Directory.CreateTempSubdirectory("flushedyo-download-tests-").FullName;
     }
 
     internal AgentBridgeOptions Options { get; }
@@ -282,7 +283,14 @@ internal sealed class BridgeTestHarness : IDisposable
 
     internal TrustedBrowserBridge Bridge { get; }
 
-    public void Dispose() => Bridge.DisposeAsync().AsTask().GetAwaiter().GetResult();
+    /// <summary>Gets a caller-owned directory for artifacts, deleted with the harness.</summary>
+    internal string Directory { get; }
+
+    public void Dispose()
+    {
+        Bridge.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        FlushedYo.Core.AgentBridge.ArtifactCopy.DeleteDirectory(Directory);
+    }
 }
 
 internal sealed class FakeSecretStore(string? secretValue) : ISecretStore
