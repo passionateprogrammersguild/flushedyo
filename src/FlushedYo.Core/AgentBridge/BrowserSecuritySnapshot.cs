@@ -34,6 +34,20 @@ public sealed record BrowserSecuritySnapshot
 
     /// <summary>Gets the monotonic browser security-state version.</summary>
     public long SecurityVersion { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this snapshot names the same verified document as
+    /// <paramref name="other"/>: the same target, top-level frame, committed loader, and origin.
+    /// <see cref="SecurityVersion"/> is deliberately excluded — it advances on any benign browser
+    /// event (an intercepted request, a frame update), so it proves one read was stable; it is not
+    /// part of the identity a protected operation must still match.
+    /// </summary>
+    internal bool HasSameDocumentIdentity(BrowserSecuritySnapshot? other) =>
+        other is not null &&
+        string.Equals(TargetId, other.TargetId, StringComparison.Ordinal) &&
+        string.Equals(TopLevelFrameId, other.TopLevelFrameId, StringComparison.Ordinal) &&
+        string.Equals(LoaderId, other.LoaderId, StringComparison.Ordinal) &&
+        string.Equals(Origin, other.Origin, StringComparison.Ordinal);
 }
 
 internal sealed record BrowserSecurityState

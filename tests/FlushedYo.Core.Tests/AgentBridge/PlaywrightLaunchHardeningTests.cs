@@ -47,4 +47,34 @@ public sealed class PlaywrightLaunchHardeningTests
         Assert.Null(context.Permissions);
         Assert.Null(context.ClientCertificates);
     }
+
+    /// <summary>
+    /// Downloads are not enabled globally on the context: the per-operation CDP window is the only
+    /// place download behavior is flipped, and it reverts to deny on every exit path.
+    /// </summary>
+    [Fact]
+    public void Downloads_AreNotEnabledGlobally_OnlyPerOperationWindow()
+    {
+        var driver = new PlaywrightBrowserSessionDriver(
+            new ProviderBrowserPolicy(Array.Empty<string>()),
+            new AgentBridgeOptions(),
+            TimeProvider.System);
+
+        try
+        {
+            var downloadCapture = typeof(PlaywrightBrowserSessionDriver)
+                .GetField("_downloadCapture", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                ?.GetValue(driver);
+            var browserCdp = typeof(PlaywrightBrowserSessionDriver)
+                .GetField("_browserCdp", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+                ?.GetValue(driver);
+
+            Assert.Null(downloadCapture);
+            Assert.Null(browserCdp);
+        }
+        finally
+        {
+            driver.Dispose();
+        }
+    }
 }

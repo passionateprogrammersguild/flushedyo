@@ -24,7 +24,8 @@ public sealed class SpoofedTextTests
 
         await bridge.NavigateAsync(new Uri(site.Url("/spoof").AbsoluteUri + "?x=%5D(https://allowed.example)"), Token);
         var snapshot = await bridge.GetSecuritySnapshotAsync(Token);
-        await bridge.SubmitCredentialAsync("synthetic/password", "#secret", snapshot, Token);
+        await bridge.SubmitCredentialAsync(
+            SubmitCredentialArgs.Create("synthetic/password", "#secret", snapshot), Token);
 
         Assert.Equal($"http://127.0.0.1:{site.Port}", snapshot.Origin);
         Assert.DoesNotContain("allowed.example", snapshot.ToString(), StringComparison.Ordinal);

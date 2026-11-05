@@ -14,6 +14,7 @@
   <ItemGroup>
     <InternalsVisibleTo Include="FlushedYo.Core.Tests" />
     <InternalsVisibleTo Include="FlushedYo.Core.PropertyTests" />
+    <InternalsVisibleTo Include="FlushedYo.IntegrationTests" />
   </ItemGroup>
 
 </Project>

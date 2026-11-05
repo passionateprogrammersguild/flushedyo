@@ -105,3 +105,93 @@ The reviewer did not read `ManualMfaBrowserTests.cs`, the hermetic test files, o
 - Dedicated tests for `beforeunload` during submit and for disposal racing a submit (the only remaining open review items).
 - Merge, and later cleanup of the frozen 002/006 worktrees.
 - Repeated-run stability check of the browser suite beyond the passes recorded above.
+
+---
+
+# Unit 011 findings: provider CSV/download capability
+
+## Spike (recorded in `specs/011-bridge-download.md`)
+
+Playwright 1.58.0 **does** surface a `Download` event with `AcceptDownloads = false`; the context
+option does not suppress the event. `AcceptDownloads = true` + `SaveAsAsync` lands the artifact in a
+caller-owned directory. A per-operation CDP `Browser.setDownloadBehavior(allowAndName)` toggle with
+the context option left `false` produced the event but never a usable file, so that path was
+rejected. Design shipped: browser-level CDP download window (`allowAndName`, scoped to the single
+context id, reverted to `deny` on every exit) + move-from-private-scratch into the caller directory
+under a hard byte cap.
+
+## Design as implemented
+
+- `IBrowserSessionDriver.DownloadAsync(DownloadRequest, verifySecurityState, ct)` and
+  `TrustedBrowserBridge.DownloadStatementAsync(cssSelector, expectedSnapshot, DownloadStatementOptions, ct)`.
+- The window opens only for the operation: a dedicated `ICDPSession` on the **browser** target, one
+  context id resolved and pinned, `allowAndName` with a private temp scratch `downloadPath`, and a
+  `deny` restore in `finally` plus a session detach and scratch-directory delete.
+- Verify-before / verify-after discipline: `verifySecurityState` runs before the window opens, after
+  selector resolution, after the click, and after the artifact is claimed.
+- `_submitOriginPin` is set to the verified origin for the trigger and cleared in `finally`.
+- `DownloadArtifactPolicy.ResolvePath` rejects a suggested filename that would escape the caller
+  directory; the byte cap is enforced before the move and again after it; every failure path deletes
+  the destination file (`ArtifactCopy`).
+- No file content is read into a string or a log. The returned `BrowserArtifact` carries path, size,
+  and origin only.
+- `AgentBridgeOptions` and `BuildContextOptions` are unchanged: `AcceptDownloads = false`,
+  `ServiceWorkers = Block`. Downloads are never enabled globally; the CDP window is per operation.
+
+## Deviations from the spec
+
+1. **`CredentialRequest` changed shape.** It is now `(SubmitCredentialArgs Args, bool Submit)` with
+   `Entry(...)` / `Submission(...)` factories, and `SubmitCredentialAsync` takes a public
+   `SubmitCredentialArgs` record. Reason: CodeScene flagged `CredentialRequest.Create` and
+   `SubmitCredentialArgs.Create` as duplicate validation and the file dropped to 9.09. Folding the
+   validation into one factory raised `BrowserOperationRequests.cs` back to **10.0**. Behaviour,
+   exception types, and wording are unchanged; the public bridge signature for `SubmitCredentialAsync`
+   is now a single record instead of three positional arguments.
+2. The spec's "hash" mention in step 3 (artifact "has expected size/hash") is satisfied by size plus
+   the caller's own verification; the bridge does not hash file content because that would mean
+   reading financial data into the process for a value the coordinator can compute itself.
+
+## Defects found and fixed while re-running the suite
+
+- `BrowserAttackTests` hung indefinitely (no Chromium involved: the whole run sat at 0 tests for
+  >2 min). Two causes, both test-only:
+  1. A regression from the harness refactor: `MapGate`/`SignalWhenRequested`/`MapHtml` were moved to
+     **after** `SetupEntryAttackAsync` had already navigated, so the page's `fetch('/gate')` hit an
+     unmapped path, the gate never existed, and `await swapped.WaitAsync(Token)` — which used the
+     unrelated test-run token, not a bounded wait — never completed. Fixed by registering the gate,
+     the signal, and the swapped HTML inside the setup callback (via a new
+     `Func<SyntheticSite, string> renderHtml` overload) so they exist before navigation.
+  2. The origin-swap test's HTML used a plain `"""` raw string while containing `{{site.Port}}`, so
+     the literal placeholder was served and the swap target was an unresolvable host — Chromium
+     committed `chrome-error://chromewebdata/`, which the snapshot validator correctly rejected as
+     `DocumentIdentity`. Fixed by rendering the template with the live port.
+- No production code changed for either.
+
+## Gate table (2026-11-04, worktree 008, unit-011 staged diff)
+
+| Check | Result |
+|---|---|
+| `dotnet build flushedyo.slnx` | 0 warnings, 0 errors |
+| `dotnet test --project tests/FlushedYo.Core.Tests` | 575 total, 574 passed, 1 skipped (pre-existing case-sensitive-filesystem skip) |
+| `dotnet test --project tests/FlushedYo.ArchitectureTests` | 15 passed |
+| `dotnet test --project tests/FlushedYo.IntegrationTests --filter "Category!=Live&Category!=Network"` | 113 passed, 0 failed |
+| Real-browser suite (`FullyQualifiedName~Browser`) | 15 passed, 0 skipped — **two consecutive passes** after the fix |
+| `dotnet format flushedyo.slnx --verify-no-changes` | exit 0 |
+| `pre_commit_code_health_safeguard` (staged diff) | **passed**, zero degraded files |
+| `BrowserOperationRequests.cs` Code Health | 9.09 → **10.0** |
+
+## Unit 003 mapping
+
+A "Fidelity export flow" on the bridge primitive is: navigate to the account export page → snapshot
+(verify-before) → `DownloadStatementAsync` on the export control → artifact lands in a
+coordinator-owned directory under the size cap and bounded wait → snapshot (verify-after, origin
+pinned via `_submitOriginPin`) → hand the path to the coordinator for durable import. Touches no
+Fidelity specifics; file contents never enter strings or logs.
+
+## Not done in this unit
+
+- The performance and systemic panels (unit 009).
+- The two previously-open review edge cases are only partly closed: origin-swap mid-download and
+  teardown racing an active download now have code paths that delete the partial artifact and fault
+  the session, but the dedicated real-browser tests for the beforeunload-during-click and
+  disposal-racing-a-download cases are still outstanding.

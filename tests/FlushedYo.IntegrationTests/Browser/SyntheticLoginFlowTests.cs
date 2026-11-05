@@ -32,7 +32,8 @@ public sealed class SyntheticLoginFlowTests
         var snapshot = await bridge.GetSecuritySnapshotAsync(Token);
         try
         {
-            await bridge.SubmitCredentialAsync("synthetic/password", "#secret", snapshot, Token);
+            await bridge.SubmitCredentialAsync(
+                SubmitCredentialArgs.Create("synthetic/password", "#secret", snapshot), Token);
         }
         catch (BridgeException)
         {
@@ -80,6 +81,7 @@ internal static class BrowserTestEnvironment
         var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
         roots.Add(Path.Combine(home, "Library", "Caches", "ms-playwright"));
         roots.Add(Path.Combine(home, ".cache", "ms-playwright"));
+
         var relativeExecutables = new[]
         {
             Path.Combine("chrome-mac-x64", "Google Chrome for Testing.app", "Contents", "MacOS", "Google Chrome for Testing"),
@@ -93,15 +95,26 @@ internal static class BrowserTestEnvironment
 
         foreach (var root in roots.Where(Directory.Exists).Distinct(StringComparer.Ordinal))
         {
-            foreach (var installation in Directory.EnumerateDirectories(root, "chromium-*").OrderByDescending(path => path, StringComparer.Ordinal))
+            var found = FindChromiumInRoot(root, relativeExecutables);
+            if (found is not null)
             {
-                foreach (var relative in relativeExecutables)
+                return found;
+            }
+        }
+
+        return null;
+    }
+
+    private static string? FindChromiumInRoot(string root, string[] relativeExecutables)
+    {
+        foreach (var installation in Directory.EnumerateDirectories(root, "chromium-*").OrderByDescending(path => path, StringComparer.Ordinal))
+        {
+            foreach (var relative in relativeExecutables)
+            {
+                var candidate = Path.Combine(installation, relative);
+                if (File.Exists(candidate))
                 {
-                    var candidate = Path.Combine(installation, relative);
-                    if (File.Exists(candidate))
-                    {
-                        return candidate;
-                    }
+                    return candidate;
                 }
             }
         }
@@ -234,45 +247,55 @@ internal sealed class SyntheticSite : IAsyncDisposable
             }
             catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
             {
-                break;
+                return;
             }
             catch (HttpListenerException) when (_lifetime.IsCancellationRequested)
             {
-                break;
+                return;
             }
             catch (ObjectDisposedException) when (_lifetime.IsCancellationRequested)
             {
-                break;
+                return;
             }
 
-            var path = context.Request.Url?.AbsolutePath ?? "/";
-            RequestCounts.AddOrUpdate(path, 1, (_, count) => count + 1);
-            if (_signals.TryRemove(path, out var signal))
+            if (await ProcessRequestAsync(context))
             {
-                signal.TrySetResult();
-            }
-
-            if (_handlers.TryGetValue(path, out var handler))
-            {
-                try
-                {
-                    await handler(context);
-                }
-                catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
-                {
-                    break;
-                }
-                catch (HttpListenerException) when (_lifetime.IsCancellationRequested)
-                {
-                    break;
-                }
-            }
-            else
-            {
-                context.Response.StatusCode = (int)HttpStatusCode.NotFound;
-                context.Response.Close();
+                return;
             }
         }
+    }
+
+    private async Task<bool> ProcessRequestAsync(HttpListenerContext context)
+    {
+        var path = context.Request.Url?.AbsolutePath ?? "/";
+        RequestCounts.AddOrUpdate(path, 1, (_, count) => count + 1);
+        if (_signals.TryRemove(path, out var signal))
+        {
+            signal.TrySetResult();
+        }
+
+        if (_handlers.TryGetValue(path, out var handler))
+        {
+            try
+            {
+                await handler(context);
+            }
+            catch (OperationCanceledException) when (_lifetime.IsCancellationRequested)
+            {
+                return true;
+            }
+            catch (HttpListenerException) when (_lifetime.IsCancellationRequested)
+            {
+                return true;
+            }
+        }
+        else
+        {
+            context.Response.StatusCode = (int)HttpStatusCode.NotFound;
+            context.Response.Close();
+        }
+
+        return false;
     }
 
     private async Task WriteHtmlAsync(HttpListenerContext context, string html)

@@ -101,7 +101,7 @@ public sealed partial class TrustedBrowserBridge : IAsyncDisposable
         BrowserSecuritySnapshot expectedSnapshot,
         CancellationToken cancellationToken = default) =>
         EnterCredentialCoreAsync(
-            CredentialRequest.Create(secretKey, cssSelector, expectedSnapshot, submit: false),
+            CredentialRequest.Entry(SubmitCredentialArgs.Create(secretKey, cssSelector, expectedSnapshot)),
             cancellationToken);
 
     /// <summary>
@@ -109,13 +109,51 @@ public sealed partial class TrustedBrowserBridge : IAsyncDisposable
     /// A target, document, origin, or security-version change through submission fails closed.
     /// </summary>
     public Task SubmitCredentialAsync(
-        string secretKey,
-        string cssSelector,
-        BrowserSecuritySnapshot expectedSnapshot,
+        SubmitCredentialArgs args,
         CancellationToken cancellationToken = default) =>
         EnterCredentialCoreAsync(
-            CredentialRequest.Create(secretKey, cssSelector, expectedSnapshot, submit: true),
+            CredentialRequest.Submission(args),
             cancellationToken);
+
+    /// <summary>
+    /// Triggers exactly one provider export control and lands the resulting artifact in a caller-owned
+    /// directory. The expected snapshot is rechecked before the click, after the click, and after the
+    /// artifact is claimed; the verified origin is pinned for the whole trigger; the byte cap and the
+    /// bounded wait are enforced; any partial artifact is deleted before a failure surfaces.
+    /// </summary>
+    public Task<BrowserArtifact> DownloadStatementAsync(
+        string cssSelector,
+        BrowserSecuritySnapshot expectedSnapshot,
+        DownloadStatementOptions options,
+        CancellationToken cancellationToken = default)
+    {
+        var downloadOptions = DownloadOptions.Create(options.DestinationDirectory, options.MaxBytes, options.Timeout);
+        if (options.Timeout > _options.ActionTimeout)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "The download wait is outside the configured bounds.");
+        }
+
+        var request = DownloadRequest.Create(cssSelector, expectedSnapshot, downloadOptions);
+
+        return RunOperationAsync(async token =>
+        {
+            if (!IsAllowedOrigin(expectedSnapshot.Origin))
+            {
+                throw new BridgePolicyException("The download origin is not allowed.");
+            }
+
+            var artifact = await _driver.DownloadAsync(
+                request,
+                verifyToken => VerifyDownloadSnapshotAsync(request.ExpectedSnapshot, verifyToken),
+                token).ConfigureAwait(false);
+            if (!string.Equals(artifact.Origin, expectedSnapshot.Origin, StringComparison.Ordinal))
+            {
+                throw new BridgeSnapshotException("The downloaded artifact origin does not match the verified origin.");
+            }
+
+            return artifact;
+        }, cancellationToken);
+    }
 
     /// <summary>
     /// Waits without code collection or automatic MFA until the structured top-level origin reaches an
@@ -245,15 +283,36 @@ public sealed partial class TrustedBrowserBridge : IAsyncDisposable
         }, cancellationToken);
     }
 
+    private async Task VerifySnapshotAsync(
+        BrowserSecuritySnapshot expected,
+        Func<BrowserSecuritySnapshot, bool> isMatch,
+        CancellationToken cancellationToken)
+    {
+        var actual = await _driver.GetSecuritySnapshotAsync(cancellationToken).ConfigureAwait(false);
+        if (!isMatch(actual))
+        {
+            throw new BridgeSnapshotException("The browser security snapshot changed before the operation completed.");
+        }
+    }
+
     private async Task VerifyExpectedSnapshotAsync(
         BrowserSecuritySnapshot expectedSnapshot,
         CancellationToken cancellationToken)
     {
-        var actual = await _driver.GetSecuritySnapshotAsync(cancellationToken).ConfigureAwait(false);
-        if (actual != expectedSnapshot)
-        {
-            throw new BridgeSnapshotException("The browser security snapshot changed before credential completion.");
-        }
+        await VerifySnapshotAsync(
+            expectedSnapshot,
+            actual => actual == expectedSnapshot,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private async Task VerifyDownloadSnapshotAsync(
+        BrowserSecuritySnapshot expectedSnapshot,
+        CancellationToken cancellationToken)
+    {
+        await VerifySnapshotAsync(
+            expectedSnapshot,
+            actual => actual.HasSameDocumentIdentity(expectedSnapshot),
+            cancellationToken).ConfigureAwait(false);
     }
 
     private async Task VerifyPostSubmitSnapshotAsync(

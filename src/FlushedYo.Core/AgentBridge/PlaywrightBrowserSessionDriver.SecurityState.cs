@@ -156,10 +156,17 @@ internal sealed partial class PlaywrightBrowserSessionDriver
     private async Task<JsonElement> SendAsync(
         string method,
         Dictionary<string, object>? parameters,
+        CancellationToken cancellationToken) =>
+        await SendAsync(RequiredCdp(), method, parameters, cancellationToken).ConfigureAwait(false);
+
+    internal async Task<JsonElement> SendAsync(
+        ICDPSession session,
+        string method,
+        Dictionary<string, object>? parameters,
         CancellationToken cancellationToken)
     {
         var result = await AwaitBrowserTaskAsync(
-            RequiredCdp().SendAsync(method, parameters),
+            session.SendAsync(method, parameters),
             cancellationToken).ConfigureAwait(false);
         return result ?? throw new BridgeSnapshotException("The browser returned no structured security metadata.");
     }

@@ -24,6 +24,11 @@ internal interface IBrowserSessionDriver
         Func<CancellationToken, Task> verifyAfterSubmit,
         CancellationToken cancellationToken = default);
 
+    Task<BrowserArtifact> DownloadAsync(
+        DownloadRequest request,
+        Func<CancellationToken, Task> verifySecurityState,
+        CancellationToken cancellationToken = default);
+
     Task CloseAsync(CancellationToken cancellationToken = default);
 
     void ForceClose();

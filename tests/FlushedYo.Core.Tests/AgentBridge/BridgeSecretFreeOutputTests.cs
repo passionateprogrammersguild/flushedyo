@@ -46,10 +46,8 @@ public sealed class BridgeSecretFreeOutputTests
 
         var exception = await Assert.ThrowsAsync<BridgeOperationException>(() =>
             harness.Bridge.SubmitCredentialAsync(
-                "website/password",
-                "#password",
-                harness.Driver.CurrentSnapshot,
-                Token));
+                SubmitCredentialArgs.Create(
+                    "website/password", "#password", harness.Driver.CurrentSnapshot), Token));
 
         AssertSecretFree(harness, exception.ToString());
         Assert.Null(exception.InnerException);

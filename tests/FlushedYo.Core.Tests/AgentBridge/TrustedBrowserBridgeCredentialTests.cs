@@ -17,12 +17,16 @@ public sealed class TrustedBrowserBridgeCredentialTests
 
         await harness.Bridge.EnterCredentialAsync("website/password", "#password", expected, Token);
 
+        AssertCredentialFetchedAndSessionOpen(harness);
+        Assert.True(harness.Driver.VerificationCount >= 5);
+    }
+
+    private static void AssertCredentialFetchedAndSessionOpen(BridgeTestHarness harness)
+    {
         Assert.Equal("website/password", harness.Secrets.RequestedKey);
         Assert.Equal(BridgeTestHarness.SecretValue, harness.Driver.SecretSeen);
         Assert.Equal(["focus", "fill"], harness.Driver.DomSteps);
-        Assert.True(harness.Driver.VerificationCount >= 5);
-        Assert.False(harness.Driver.DocumentNavigationFrozen);
-        Assert.False(harness.Driver.Closed);
+        AssertNotClosed(harness.Bridge, harness.Driver);
     }
 
     [Fact]
@@ -35,9 +39,42 @@ public sealed class TrustedBrowserBridgeCredentialTests
         var exception = await Assert.ThrowsAsync<BridgeSnapshotException>(() =>
             harness.Bridge.EnterCredentialAsync("website/password", "#password", expected, Token));
 
+        AssertNoSecretLeaked(exception);
         Assert.Equal(0, harness.Secrets.CallCount);
         Assert.Empty(harness.Driver.DomSteps);
-        Assert.True(harness.Driver.Closed);
+        AssertSessionClosed(harness);
+    }
+
+    private static void AssertSessionClosed(BridgeTestHarness harness)
+    {
+        AssertSnapshotAndSession(harness.Bridge, harness.Driver, closed: true, frozen: false);
+    }
+
+    private static void AssertDomSteps(BridgeTestHarness harness, params string[] expected)
+    {
+        Assert.Equal(expected, harness.Driver.DomSteps);
+    }
+
+    private static void AssertSecretNotSeen(BridgeTestHarness harness)
+    {
+        Assert.Null(harness.Driver.SecretSeen);
+    }
+
+    private static void AssertFailureClosedNoSecret(BridgeTestHarness harness, params string[] steps)
+    {
+        AssertDomSteps(harness, steps);
+        AssertSecretNotSeen(harness);
+        AssertSessionClosed(harness);
+    }
+
+    private static void AssertFailureClosed(BridgeTestHarness harness, params string[] steps)
+    {
+        AssertDomSteps(harness, steps);
+        AssertSessionClosed(harness);
+    }
+
+    private static void AssertNoSecretLeaked(Exception exception)
+    {
         Assert.DoesNotContain(BridgeTestHarness.SecretValue, exception.ToString(), StringComparison.Ordinal);
     }
 
@@ -59,9 +96,7 @@ public sealed class TrustedBrowserBridgeCredentialTests
         await Assert.ThrowsAsync<BridgeSnapshotException>(() =>
             harness.Bridge.EnterCredentialAsync("website/password", "#password", expected, Token));
 
-        Assert.Equal(["focus"], harness.Driver.DomSteps);
-        Assert.Null(harness.Driver.SecretSeen);
-        Assert.True(harness.Driver.Closed);
+        AssertFailureClosedNoSecret(harness, "focus");
     }
 
     [Fact]
@@ -79,10 +114,11 @@ public sealed class TrustedBrowserBridgeCredentialTests
             return Task.CompletedTask;
         };
 
-        await harness.Bridge.SubmitCredentialAsync("website/password", "#password", expected, Token);
+        await harness.Bridge.SubmitCredentialAsync(
+            SubmitCredentialArgs.Create("website/password", "#password", expected), Token);
 
-        Assert.Equal(["focus", "fill", "submit"], harness.Driver.DomSteps);
-        Assert.False(harness.Driver.Closed);
+        AssertDomSteps(harness, "focus", "fill", "submit");
+        AssertNotClosed(harness.Bridge, harness.Driver);
     }
 
     [Theory]
@@ -103,10 +139,10 @@ public sealed class TrustedBrowserBridgeCredentialTests
         };
 
         await Assert.ThrowsAsync<BridgeSnapshotException>(() =>
-            harness.Bridge.SubmitCredentialAsync("website/password", "#password", expected, Token));
+            harness.Bridge.SubmitCredentialAsync(
+                SubmitCredentialArgs.Create("website/password", "#password", expected), Token));
 
-        Assert.Equal(["focus", "fill", "submit"], harness.Driver.DomSteps);
-        Assert.True(harness.Driver.Closed);
+        AssertFailureClosed(harness, "focus", "fill", "submit");
     }
 
     [Fact]
@@ -115,13 +151,10 @@ public sealed class TrustedBrowserBridgeCredentialTests
         using var harness = new BridgeTestHarness();
 
         await Assert.ThrowsAsync<BridgeOperationException>(() => harness.Bridge.SubmitCredentialAsync(
-            "website/password",
-            "#password",
-            harness.Driver.CurrentSnapshot,
+            SubmitCredentialArgs.Create("website/password", "#password", harness.Driver.CurrentSnapshot),
             Token));
 
-        Assert.Equal(["focus", "fill", "submit"], harness.Driver.DomSteps);
-        Assert.True(harness.Driver.Closed);
+        AssertFailureClosed(harness, "focus", "fill", "submit");
     }
 
     [Fact]
@@ -140,9 +173,10 @@ public sealed class TrustedBrowserBridgeCredentialTests
         };
 
         await Assert.ThrowsAsync<BridgeSnapshotException>(() =>
-            harness.Bridge.SubmitCredentialAsync("website/password", "#password", expected, Token));
+            harness.Bridge.SubmitCredentialAsync(
+                SubmitCredentialArgs.Create("website/password", "#password", expected), Token));
 
-        Assert.True(harness.Driver.Closed);
+        AssertFailureClosed(harness, "focus", "fill", "submit");
     }
 
     [Fact]
@@ -158,8 +192,7 @@ public sealed class TrustedBrowserBridgeCredentialTests
                 Token));
 
         Assert.DoesNotContain("missing/key", exception.Message, StringComparison.Ordinal);
-        Assert.True(harness.Driver.Closed);
-        Assert.Empty(harness.Driver.DomSteps);
+        AssertFailureClosedNoSecret(harness);
     }
 
     [Theory]
@@ -177,8 +210,20 @@ public sealed class TrustedBrowserBridgeCredentialTests
                 harness.Driver.CurrentSnapshot,
                 Token));
 
-        Assert.Empty(harness.Driver.DomSteps);
-        Assert.True(harness.Driver.Closed);
+        AssertFailureClosedNoSecret(harness);
+    }
+
+    private static void AssertSnapshotAndSession(TrustedBrowserBridge bridge, FakeBrowserSessionDriver driver,
+        bool closed, bool frozen)
+    {
+        Assert.Equal(closed, driver.Closed);
+        Assert.Equal(frozen, driver.DocumentNavigationFrozen);
+    }
+
+    private static void AssertNotClosed(TrustedBrowserBridge bridge, FakeBrowserSessionDriver driver)
+    {
+        Assert.False(driver.Closed);
+        Assert.False(driver.DocumentNavigationFrozen);
     }
 
     [Fact]
@@ -194,7 +239,7 @@ public sealed class TrustedBrowserBridgeCredentialTests
         await Assert.ThrowsAsync<ArgumentNullException>(() =>
             harness.Bridge.EnterCredentialAsync("website/password", "#password", null!, Token));
 
-        Assert.False(harness.Driver.Closed);
+        AssertNotClosed(harness.Bridge, harness.Driver);
         var actual = await harness.Bridge.GetSecuritySnapshotAsync(Token);
         Assert.Equal(expected, actual);
     }
@@ -275,6 +320,7 @@ internal sealed class FakeBrowserSessionDriver : IBrowserSessionDriver
 {
     private int _faulted;
     private int _verificationCount;
+    private int _downloadCallCount;
 
     internal BrowserSecuritySnapshot CurrentSnapshot { get; set; } = TrustedBrowserBridgeCredentialTests.Snapshot();
 
@@ -301,6 +347,12 @@ internal sealed class FakeBrowserSessionDriver : IBrowserSessionDriver
     internal Func<CancellationToken, Task>? CloseHook { get; set; }
 
     internal Func<int, CancellationToken, Task>? SnapshotHook { get; set; }
+
+    internal Func<DownloadRequest, Func<CancellationToken, Task>, CancellationToken, Task<BrowserArtifact>>? DownloadHandler { get; set; }
+
+    internal DownloadRequest? LastDownloadRequest { get; private set; }
+
+    internal int DownloadCallCount => Volatile.Read(ref _downloadCallCount);
 
     public bool IsFaulted => Volatile.Read(ref _faulted) != 0;
 
@@ -355,6 +407,22 @@ internal sealed class FakeBrowserSessionDriver : IBrowserSessionDriver
 
             await Verify(verifyAfterSubmit, cancellationToken);
         }
+    }
+
+    public async Task<BrowserArtifact> DownloadAsync(
+        DownloadRequest request,
+        Func<CancellationToken, Task> verifySecurityState,
+        CancellationToken cancellationToken = default)
+    {
+        Interlocked.Increment(ref _downloadCallCount);
+        await Verify(verifySecurityState, cancellationToken);
+        LastDownloadRequest = request;
+        if (DownloadHandler is null)
+        {
+            throw new BridgeOperationException("The download seam is not configured.");
+        }
+
+        return await DownloadHandler(request, verifySecurityState, cancellationToken);
     }
 
     public async Task CloseAsync(CancellationToken cancellationToken = default)

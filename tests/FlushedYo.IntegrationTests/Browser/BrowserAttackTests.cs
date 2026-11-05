@@ -10,111 +10,100 @@ public sealed class BrowserAttackTests
     [Fact]
     public async Task OriginSwapBetweenSnapshotAndEntry_FailsClosedWithoutCredentialSubmission()
     {
-        BrowserTestEnvironment.RequireChromium();
-        await using var site = new SyntheticSite();
-        var swapped = site.SignalWhenRequested("/swapped");
-        var gate = site.MapGate("/gate");
-        site.MapHtml("/origin-swap", $$"""
+        Task? swapped = null;
+        TaskCompletionSource? gate = null;
+        await using var harness = await SetupEntryAttackAsync(
+            "/origin-swap",
+            site => $$"""
             <!doctype html><input id="secret" type="password">
             <script>fetch('/gate').then(() => { location.href = 'http://localhost:{{site.Port}}/swapped'; });</script>
-            """);
-        site.MapHtml("/swapped", "<!doctype html><input id=\"secret\" type=\"password\">");
-        await using var bridge = site.CreateBridge();
-        await bridge.NavigateAsync(site.Url("/origin-swap"), Token);
-        var expected = await bridge.GetSecuritySnapshotAsync(Token);
-        gate.SetResult();
-        await swapped.WaitAsync(Token);
-        await WaitForSnapshotChangeAsync(bridge, expected);
+            """,
+            site =>
+            {
+                swapped = site.SignalWhenRequested("/swapped");
+                gate = site.MapGate("/gate");
+                site.MapHtml("/swapped", "<!doctype html><input id=\"secret\" type=\"password\">");
+            });
+        gate!.SetResult();
+        await swapped!.WaitAsync(Token);
+        await WaitForSnapshotChangeAsync(harness.Bridge, harness.Expected);
 
         await Assert.ThrowsAnyAsync<BridgeException>(() =>
-            bridge.EnterCredentialAsync("synthetic/password", "#secret", expected, Token));
-        Assert.Empty(site.FormSecrets);
-        await AssertFaulted(bridge);
+            harness.Bridge.EnterCredentialAsync("synthetic/password", "#secret", harness.Expected, Token));
+        Assert.Empty(harness.Site.FormSecrets);
+        await AssertFaulted(harness.Bridge);
     }
 
     [Fact]
     public async Task MidEntryDocumentNavigation_IsFrozenAndFaultsSession()
     {
-        BrowserTestEnvironment.RequireChromium();
-        await using var site = new SyntheticSite();
-        site.MapHtml("/freeze", """
+        await using var harness = await SetupEntryAttackAsync("/freeze", """
             <!doctype html><input id="secret" type="password"
               oninput="location.href='/frozen-attempt'">
             """);
-        site.MapHtml("/frozen-attempt", "<!doctype html>Navigation must not reach the server");
-        await using var bridge = site.CreateBridge();
-        await bridge.NavigateAsync(site.Url("/freeze"), Token);
-        var expected = await bridge.GetSecuritySnapshotAsync(Token);
+        harness.Site.MapHtml("/frozen-attempt", "<!doctype html>Navigation must not reach the server");
 
         await Assert.ThrowsAnyAsync<BridgeException>(() =>
-            bridge.EnterCredentialAsync("synthetic/password", "#secret", expected, Token));
-        Assert.False(site.RequestCounts.ContainsKey("/frozen-attempt"));
-        await AssertFaulted(bridge);
+            harness.Bridge.EnterCredentialAsync("synthetic/password", "#secret", harness.Expected, Token));
+        Assert.False(harness.Site.RequestCounts.ContainsKey("/frozen-attempt"));
+        await AssertFaulted(harness.Bridge);
     }
 
     [Fact]
     public async Task TopFrameSwapAfterSnapshot_FailsClosed()
     {
-        BrowserTestEnvironment.RequireChromium();
-        await using var site = new SyntheticSite();
-        var swapped = site.SignalWhenRequested("/frame-swapped");
-        var gate = site.MapGate("/gate");
-        site.MapHtml("/frame-swap", """
+        Task? swapped = null;
+        TaskCompletionSource? gate = null;
+        await using var harness = await SetupEntryAttackAsync(
+            "/frame-swap",
+            """
             <!doctype html><input id="secret" type="password">
             <script>fetch('/gate').then(() => { location.href = '/frame-swapped'; });</script>
-            """);
-        site.MapHtml("/frame-swapped", "<!doctype html><input id=\"secret\" type=\"password\">");
-        await using var bridge = site.CreateBridge();
-        await bridge.NavigateAsync(site.Url("/frame-swap"), Token);
-        var expected = await bridge.GetSecuritySnapshotAsync(Token);
-        gate.SetResult();
-        await swapped.WaitAsync(Token);
-        await WaitForSnapshotChangeAsync(bridge, expected);
+            """,
+            site =>
+            {
+                swapped = site.SignalWhenRequested("/frame-swapped");
+                gate = site.MapGate("/gate");
+                site.MapHtml("/frame-swapped", "<!doctype html><input id=\"secret\" type=\"password\">");
+            });
+        gate!.SetResult();
+        await swapped!.WaitAsync(Token);
+        await WaitForSnapshotChangeAsync(harness.Bridge, harness.Expected);
 
         await Assert.ThrowsAnyAsync<BridgeException>(() =>
-            bridge.EnterCredentialAsync("synthetic/password", "#secret", expected, Token));
-        await AssertFaulted(bridge);
+            harness.Bridge.EnterCredentialAsync("synthetic/password", "#secret", harness.Expected, Token));
+        await AssertFaulted(harness.Bridge);
     }
 
     [Fact]
     public async Task NewTabInjectionDuringEntry_IsClosedAndFaultsSession()
     {
-        BrowserTestEnvironment.RequireChromium();
-        await using var site = new SyntheticSite();
-        site.MapHtml("/popup-attack", """
+        await using var harness = await SetupEntryAttackAsync("/popup-attack", """
             <!doctype html><input id="secret" type="password"
               oninput="window.open('/popup', '_blank')">
             """);
-        site.MapHtml("/popup", "<!doctype html>Injected target");
-        await using var bridge = site.CreateBridge();
-        await bridge.NavigateAsync(site.Url("/popup-attack"), Token);
-        var expected = await bridge.GetSecuritySnapshotAsync(Token);
+        harness.Site.MapHtml("/popup", "<!doctype html>Injected target");
 
         var exception = await Assert.ThrowsAnyAsync<BridgeException>(() =>
-            bridge.EnterCredentialAsync("synthetic/password", "#secret", expected, Token));
+            harness.Bridge.EnterCredentialAsync("synthetic/password", "#secret", harness.Expected, Token));
 
         Assert.Contains("additional page target", exception.Message, StringComparison.Ordinal);
-        await AssertFaulted(bridge);
+        await AssertFaulted(harness.Bridge);
     }
 
     [Fact]
     public async Task TargetFloodDuringEntry_FaultsAndTearsDownWithoutHanging()
     {
-        BrowserTestEnvironment.RequireChromium();
-        await using var site = new SyntheticSite();
-        site.MapHtml("/flood", """
+        await using var harness = await SetupEntryAttackAsync("/flood", """
             <!doctype html><input id="secret" type="password"
               oninput="for (let i = 0; i < 40; i++) { window.open('/popup', '_blank'); }">
             """);
-        site.MapHtml("/popup", "<!doctype html>Injected target");
-        await using var bridge = site.CreateBridge();
-        await bridge.NavigateAsync(site.Url("/flood"), Token);
-        var expected = await bridge.GetSecuritySnapshotAsync(Token);
+        harness.Site.MapHtml("/popup", "<!doctype html>Injected target");
 
         await Assert.ThrowsAnyAsync<BridgeException>(() =>
-            bridge.EnterCredentialAsync("synthetic/password", "#secret", expected, Token));
+            harness.Bridge.EnterCredentialAsync("synthetic/password", "#secret", harness.Expected, Token));
 
-        await AssertFaulted(bridge);
+        await AssertFaulted(harness.Bridge);
     }
 
     [Fact]
@@ -134,7 +123,8 @@ public sealed class BrowserAttackTests
         var snapshot = await bridge.GetSecuritySnapshotAsync(Token);
 
         await Assert.ThrowsAnyAsync<BridgeException>(() =>
-            bridge.SubmitCredentialAsync("synthetic/password", "#secret", snapshot, Token));
+            bridge.SubmitCredentialAsync(
+                SubmitCredentialArgs.Create("synthetic/password", "#secret", snapshot), Token));
 
         Assert.False(site.RequestCounts.ContainsKey("/submit"));
         Assert.Empty(site.FormSecrets);
@@ -172,5 +162,46 @@ public sealed class BrowserAttackTests
     private static async Task AssertFaulted(TrustedBrowserBridge bridge)
     {
         await Assert.ThrowsAsync<BridgeOperationException>(() => bridge.GetSecuritySnapshotAsync(Token));
+    }
+
+    private sealed class AttackHarness : IAsyncDisposable
+    {
+        public AttackHarness(SyntheticSite site, TrustedBrowserBridge bridge, BrowserSecuritySnapshot expected)
+        {
+            Site = site;
+            Bridge = bridge;
+            Expected = expected;
+        }
+
+        public SyntheticSite Site { get; }
+        public TrustedBrowserBridge Bridge { get; }
+        public BrowserSecuritySnapshot Expected { get; }
+
+        public async ValueTask DisposeAsync()
+        {
+            await Bridge.DisposeAsync();
+            await Site.DisposeAsync();
+        }
+    }
+
+    private static Task<AttackHarness> SetupEntryAttackAsync(
+        string path,
+        string html,
+        Action<SyntheticSite>? extra = null) =>
+        SetupEntryAttackAsync(path, _ => html, extra);
+
+    private static async Task<AttackHarness> SetupEntryAttackAsync(
+        string path,
+        Func<SyntheticSite, string> renderHtml,
+        Action<SyntheticSite>? extra = null)
+    {
+        BrowserTestEnvironment.RequireChromium();
+        var site = new SyntheticSite();
+        site.MapHtml(path, renderHtml(site));
+        extra?.Invoke(site);
+        var bridge = site.CreateBridge();
+        await bridge.NavigateAsync(site.Url(path), Token);
+        var expected = await bridge.GetSecuritySnapshotAsync(Token);
+        return new AttackHarness(site, bridge, expected);
     }
 }

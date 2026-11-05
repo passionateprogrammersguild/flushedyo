@@ -24,7 +24,8 @@ public sealed class SubmitEvidenceBrowserTests
         var snapshot = await bridge.GetSecuritySnapshotAsync(Token);
 
         await Assert.ThrowsAsync<BridgeOperationException>(() =>
-            bridge.SubmitCredentialAsync("synthetic/password", "#secret", snapshot, Token));
+            bridge.SubmitCredentialAsync(
+                SubmitCredentialArgs.Create("synthetic/password", "#secret", snapshot), Token));
 
         Assert.False(site.RequestCounts.ContainsKey("/submit"));
         Assert.Empty(site.FormSecrets);
