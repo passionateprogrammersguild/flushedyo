@@ -7,12 +7,14 @@
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="Microsoft.Playwright" />
     <PackageReference Include="ModelContextProtocol" />
   </ItemGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="FlushedYo.Core.Tests" />
     <InternalsVisibleTo Include="FlushedYo.Core.PropertyTests" />
+    <InternalsVisibleTo Include="FlushedYo.IntegrationTests" />
   </ItemGroup>
 
 </Project>

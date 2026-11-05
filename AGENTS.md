@@ -24,6 +24,9 @@ Run from the repo root. All verified working.
 
 `--solution` includes the Live tests, which **fail** (not skip) without an exported `BW_SESSION`. Without an unlocked vault, verify with the Unit and Integration rows above instead (the `bitwarden_tests` plugin's `all` preset unlocks first). A passing `Unit` + filtered `Integration` run, a clean build, and a clean format check are the equivalent bar when the vault is locked.
 
+## CodeScene
+After changing code, run `code_health_review` on the changed files. If Code Health drops, fix the issues, run the review again, and use `code_health_score` to confirm the result. Before finishing, run `pre_commit_code_health_safeguard` and only stop when it passes.
+
 **OpenCode test plugin.** `.opencode/plugins/bw-tests/` auto-loads an OpenCode server plugin that exposes `bitwarden_unlock`, `bitwarden_status`, `bitwarden_lock`, and `bitwarden_tests`. It captures the Bitwarden master password only through a masked, OS-native dialog (Keychain/`osascript`, libsecret/GUI pickers/`systemd-ask-password`, or PowerShell), never a tool argument, and holds the session key in memory only. `bitwarden_tests` runs the presets above with `BW_SESSION` injected into the `dotnet test` child alone and redacts it from output; `live` and `all` unlock first. Its own `node --test` suite is hermetic — no GUI, vault, or network. See `.opencode/plugins/bw-tests/README.md` for prompt ordering and environment overrides.
 
 ## Architecture
