@@ -1,0 +1,59 @@
+{
+    "name": "Local Development Setup",
+    "build": {
+        "dockerfile": "Dockerfile"
+    },
+    "containerEnv": {
+        "OPENAI_BASE_URL": "${localEnv:OPENAI_BASE_URL}",
+        "OPENAI_API_KEY": "${localEnv:OPENAI_API_KEY}",
+        "GMAIL_CLIENT_ID": "${localEnv:GMAIL_CLIENT_ID}",
+        "GMAIL_CLIENT_SECRET": "${localEnv:GMAIL_CLIENT_SECRET}"
+    },
+    // Specifies the user VS Code server and sub-processes run as inside the container
+    "remoteUser": "vscode",
+    // Optional: Specifies the user the entire container runs as from startup
+    "containerUser": "vscode",
+    "features": {
+        "ghcr.io/devcontainers/features/common-utils:2": {
+            "installZsh": true,
+            "installOhMyZsh": true,
+            "configureZshAsDefaultShell": true,
+            "upgradePackages": false,
+            "username": "vscode"
+        },
+        "ghcr.io/schlich/devcontainer-features/starship:0": {},
+        // Installs OpenCode via standard features
+        "ghcr.io/devcontainer-community/devcontainer-features/opencode.ai:1": {},
+        "ghcr.io/rails/devcontainer/features/bun:1": {
+            "version": "latest"
+        },
+        "ghcr.io/roul/devcontainer-features/bitwarden-cli:1": {}
+    },
+    "mounts": [
+        // Binds your host Mac configuration directory cleanly into the devcontainer user profile
+        "source=${localEnv:HOME}/.config/opencode,target=/home/vscode/.config/opencode,type=bind",
+        "source=${localEnv:HOME}/.config/starship.toml,target=/home/vscode/.config/starship.toml,type=bind"
+    ],
+    "customizations": {
+        "vscode": {
+            "settings": {
+                "terminal.integrated.defaultProfile.linux": "zsh",
+                "terminal.integrated.profiles.linux": {
+                    "zsh": {
+                        "path": "/bin/zsh"
+                    }
+                },
+                // Instructs VS Code to use the JetBrains Nerd Font inside the integrated terminal
+                "terminal.integrated.fontFamily": "'JetBrainsMono Nerd Font', 'JetBrains Mono'"
+            }
+        }
+    },
+    "postCreateCommand": {
+        "starship-export": "mkdir -p ~/.config && echo 'eval \"$(starship init zsh)\"' >> ~/.zshrc && echo 'eval \"$(starship init bash)\"' >> ~/.bashrc && export STARSHIP_CONFIG=~/.config/starship.toml",
+        "graphicle-install": "curl -fsSL https://github.com/graphicle-ai/graphicle/releases/latest/download/install.sh | sh",
+    },
+    "postAttachCommand": {
+        "graphicle-setup": "cd ${containerWorkspaceFolder} && graphicle setup",
+        "graphicle-config": "graphicle config set model openai --url $OPENAI_BASE_URL --model qwen/qwen3.7-flash"
+    }
+}

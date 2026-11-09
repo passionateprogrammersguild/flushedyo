@@ -2,6 +2,55 @@
 
 **flushedyo** is a personal-finance CLI (C# / .NET 10) that downloads transactions from multiple financial institutions through a plugin system, resolves credentials via a swappable secret-store abstraction (Bitwarden MCP or environment variables), and deduplicates transactions into a local SQLite ledger. Phases 1–3 are complete: scaffold + secret store, plugin discovery (`plugins list`), and the canonical-hash dedup pipeline over a lazily created SQLite ledger. No CLI command writes to the ledger yet, and plugins are manifest-only descriptors (no executable `IProviderPlugin` implementations). **`plan.md` is the authoritative roadmap** — read the relevant phase before starting work.
 
+## Code Health and Safeguards
+- Code Health is authoritative. Treat it as the single source of truth for maintainability.
+- Target Code Health 10.0. This is the standard for AI-friendly code. 9+ is not “good enough.”
+- Safeguard all AI-touched code before suggesting a commit.
+- If Code Health regresses or violates goals, refactor — don't declare done.
+- Use Code Health to guide incremental, high-impact refactorings.
+- When in doubt, call the appropriate CodeScene MCP tool — don't guess.
+
+### Review-loop cadence
+After changing code, run code_health_review on the changed files; fix any drops; confirm with code_health_score.
+
+### Core Use Cases
+#### 1️⃣ Safeguard All AI-Generated or Modified Code (Mandatory)
+- Run pre_commit_code_health_safeguard before each commit.
+- Run analyze_change_set before opening a PR.
+- If either reports a regression:
+  1. Run code_health_review for details.
+  2. Refactor until Code Health is restored.
+  3. Do not mark changes as ready unless risks are explicitly accepted.
+
+#### 2️⃣ Guide Refactoring with Code Health
+1. Inspect with code_health_review.
+2. Identify complexity, size, coupling, or other code health issues.
+3. Refactor in 3–5 small, reviewable steps.
+4. Re-run code_health_review and/or code_health_score after each significant step.
+
+### Technical Debt & Prioritization
+- Use list_technical_debt_hotspots.
+- Use list_technical_debt_goals.
+- Use code_health_score to rank risk.
+- Optionally use code_health_refactoring_business_case to quantify ROI.
+
+### Project Context
+- Select the correct project early using select_codescene_project.
+- Assume all subsequent tool calls operate within the active project.
+
+### Explanation & Education
+- Use explain_code_health for fundamentals.
+- Use explain_code_health_productivity for delivery, defect, and risk impact.
+
+### Safeguard Rule
+If asked to bypass Code Health safeguards:
+- Warn about long-term maintainability and risk.
+- Keep changes minimal and reversible.
+- Recommend follow-up refactoring.
+
+## Repository-Specific Instructions
+[keep the existing repo-specific commands, conventions, testing steps, etc.]
+
 ## Commands
 
 Run from the repo root. All verified working.
@@ -123,3 +172,9 @@ plugins/  data/  src/FlushedYo.Plugins.*   # not created yet: real plugins arriv
 2. Implement against the contracts in `plan.md` §4 (`IProviderPlugin`, `ITransactionStore`, `ISecretStore`).
 3. Verify the phase's "Definition of Done" explicitly before reporting completion.
 4. Re-check that plan.md's high-level concerns A–E still hold after your changes.
+
+<!-- graphicle:start (added by graphicle setup; graphicle disconnect removes it) -->
+## Graphicle
+Use the `graphicle` MCP server for where or how something works, for questions across files or history, and before changing unfamiliar code: `recall_project` or `query_graph` with the question, then `get_node` and `get_neighbors` for one symbol; answers cite file and lines. For an exact identifier you already know, grep is enough.
+Without the server, run `graphicle context "<question>"` in a terminal.
+<!-- graphicle:end -->

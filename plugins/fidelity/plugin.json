@@ -1,0 +1,16 @@
+{
+  "name": "fidelity",
+  "version": "1.0.0",
+  "capabilities": [
+    "download-transactions"
+  ],
+  "mcpServers": [],
+  "skills": [
+    "login",
+    "accounts",
+    "download-transactions"
+  ],
+  "tools": [
+    "read-run-result"
+  ]
+}
