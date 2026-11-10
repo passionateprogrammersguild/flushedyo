@@ -29,7 +29,6 @@ public sealed class FidelityManifestTests
             Assert.Equal("fidelity", plugin.Name);
             Assert.Equal("1.0.0", plugin.Version);
             Assert.Equal([PluginCapability.DownloadTransactions], plugin.Capabilities);
-            Assert.Empty(plugin.Manifest.McpServers);
             Assert.Null(plugin.Manifest.Assembly);
             Assert.Null(plugin.Manifest.Type);
             Assert.Equal("fidelity/username", plugin.Configuration.CredentialKeys.Username);

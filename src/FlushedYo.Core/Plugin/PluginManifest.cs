@@ -14,10 +14,10 @@ public sealed record PluginManifest
     /// <summary>Declared capabilities. Empty when the manifest omits them.</summary>
     public IReadOnlyList<PluginCapability> Capabilities { get; init; } = [];
 
-    /// <summary>Names of the MCP servers the plugin requires. Empty when the manifest omits them.</summary>
-    public IReadOnlyList<string> McpServers { get; init; } = [];
-
-    /// <summary>Skill names the plugin uses. Each must exist under the plugin's <c>skills/</c> folder.</summary>
+    /// <summary>
+    /// Skill names the plugin uses. Each must exist under the plugin's <c>skills/</c> folder.
+    /// MCP-server needs are expressed inside skill content; the harness decides how to run them.
+    /// </summary>
     public IReadOnlyList<string> Skills { get; init; } = [];
 
     /// <summary>Tool names the plugin uses. Each must exist under the plugin's <c>tools/</c> folder.</summary>

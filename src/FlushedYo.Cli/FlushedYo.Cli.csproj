@@ -2,6 +2,26 @@
 
   <PropertyGroup>
     <OutputType>Exe</OutputType>
+    <PackAsTool>true</PackAsTool>
+    <ToolCommandName>flushedyo</ToolCommandName>
+    <PackageId>FlushedYo</PackageId>
+    <Version>1.0.0</Version>
+
+    <!-- Package metadata shown by NuGet and `dotnet tool install` -->
+    <Authors>flushedyo contributors</Authors>
+    <Description>Personal-finance CLI: download transactions from multiple institutions through plugins, deduplicate them into a local SQLite ledger, and resolve credentials through a swappable secret store.</Description>
+    <PackageTags>cli;finance;transactions;tool</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <RepositoryType>git</RepositoryType>
+
+    <!--
+      PackAsTool sweeps the publish output into tools/<tfm>/any, including the Playwright
+      driver and its helper .ps1 files. NuGet only recognizes install/uninstall/init.ps1, so
+      it raises NU5111 for each one. The drivers must ship (the agent bridge launches them at
+      runtime), so the warning is suppressed rather than the files excluded.
+    -->
+    <NoWarn>$(NoWarn);NU5111</NoWarn>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,6 +36,11 @@
 
   <ItemGroup>
     <None Include="appsettings.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="..\..\README.md" Pack="true" PackagePath="\" Visible="false" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Update=".playwright\**" Pack="false" />
+    <None Update="bin\**" Pack="false" />
   </ItemGroup>
 
 </Project>

@@ -46,6 +46,18 @@ builder.Services.AddSingleton<DownloadCommand>();
 builder.Services.AddSingleton<StatusCommand>();
 
 builder.Services.AddSingleton<EnvironmentVariableSecretStore>();
+builder.Services.AddSingleton<AgentSkillsService>();
+builder.Services.AddSingleton<AgentSurfaceCommand>();
+builder.Services.AddSingleton<AgentWorkflowService>(serviceProvider =>
+{
+    var options = serviceProvider.GetRequiredService<IOptions<FlushedYoOptions>>().Value;
+    var pluginDirectory = PluginDirectoryResolver.Resolve(options.PluginDirectory);
+    var ledgerPath = RepositoryPathResolver.Resolve(options.LedgerPath);
+    return new AgentWorkflowService(pluginDirectory, ledgerPath,
+        serviceProvider.GetRequiredService<IPluginCatalog>(),
+        serviceProvider.GetRequiredService<ILogger<AgentWorkflowService>>());
+});
+builder.Services.AddSingleton<WorkflowService>();
 builder.Services.AddSingleton<BitwardenMcpSecretStore>();
 builder.Services.AddSingleton<ISecretStore>(static serviceProvider =>
 {
@@ -115,6 +127,24 @@ try
         return 0;
     }
 
+    if (args[0].Equals("agents", StringComparison.OrdinalIgnoreCase))
+    {
+        var all = await host.Services.GetRequiredService<IPluginCatalog>().GetPluginsAsync(cts.Token);
+        Console.WriteLine(AgentSurfaceFormatter.FormatManifest(all));
+        return 0;
+    }
+
+    if (args[0].Equals("workflow", StringComparison.OrdinalIgnoreCase))
+    {
+        var json = args.Contains("--json", StringComparer.OrdinalIgnoreCase);
+        return await host.Services.GetRequiredService<WorkflowService>().ExecuteAsync(json, Console.Out, cts.Token);
+    }
+
+    if (args[0].Equals("skills", StringComparison.OrdinalIgnoreCase) || args[0].Equals("tools", StringComparison.OrdinalIgnoreCase))
+    {
+        return AgentSurfaceRouting(args[1..], args[0], host.Services, Console.Out, Console.Error, cts.Token);
+    }
+
     if (args[0].Equals("login", StringComparison.OrdinalIgnoreCase))
     {
         return await RunCommandAsync<LoginCommand>((command, options) => command.ExecuteAsync(options, Console.Out, Console.Error, cts.Token));
@@ -161,6 +191,61 @@ async Task<int> RunCommandAsync<TCommand>(Func<TCommand, CommandLineOptions, Tas
     return await run(host.Services.GetRequiredService<TCommand>(), options);
 }
 
+static int AgentSurfaceRouting(string[] subArgs, string command, IServiceProvider services, TextWriter output, TextWriter error, CancellationToken token)
+{
+    static int RunSync(Func<Task<int>> func)
+    {
+        try
+        {
+            return func().GetAwaiter().GetResult();
+        }
+        catch (OperationCanceledException)
+        {
+            return 130;
+        }
+    }
+
+    if (subArgs.Length == 0 || (subArgs[0] != "list" && subArgs[0] != "read"))
+    {
+        error.WriteLine($"Usage: flushedyo {command} list | read <plugin> <name> [--json]");
+        return PrintUsage(isError: true);
+    }
+
+    var surface = services.GetRequiredService<AgentSurfaceCommand>();
+    var json = subArgs.Contains("--json", StringComparer.OrdinalIgnoreCase);
+    var rest = subArgs.Where(static (arg, _) => !arg.Equals("--json", StringComparison.OrdinalIgnoreCase)).ToArray();
+
+    if (rest[0] == "list")
+    {
+        if (rest.Length > 1)
+        {
+            error.WriteLine($"Unexpected arguments for flushedyo {command} list.");
+            return PrintUsage(isError: true);
+        }
+
+        return command.Equals("skills", StringComparison.OrdinalIgnoreCase)
+            ? RunSync(() => surface.ExecuteSkillsAsync(new CommandLineOptions(null, json), null, output, error, token))
+            : RunSync(() => surface.ExecuteToolsAsync(new CommandLineOptions(null, json), null, output, error, token));
+    }
+
+    if (rest[0] == "read")
+    {
+        if (rest.Length < 3)
+        {
+            error.WriteLine($"Usage: flushedyo {command} read <plugin> <name> [--json]");
+            return PrintUsage(isError: true);
+        }
+
+        var options = new CommandLineOptions(rest[1], json);
+        return command.Equals("skills", StringComparison.OrdinalIgnoreCase)
+            ? RunSync(() => surface.ExecuteSkillsAsync(options, rest[2], output, error, token))
+            : RunSync(() => surface.ExecuteToolsAsync(options, rest[2], output, error, token));
+    }
+
+    error.WriteLine($"Unknown {command} subcommand '{rest[0]}'.");
+    return PrintUsage(isError: true);
+}
+
 static int PrintUsage(bool isError = false)
 {
     var writer = isError ? Console.Error : Console.Out;
@@ -169,8 +254,14 @@ static int PrintUsage(bool isError = false)
     writer.WriteLine("Usage:");
     writer.WriteLine("  flushedyo get-secret <key> [--raw]              Resolve a secret from the configured secret store.");
     writer.WriteLine("  flushedyo plugins list                          List discovered plugins.");
+    writer.WriteLine("  flushedyo workflow [--json]                     Show the agent workflow state and next step.");
+    writer.WriteLine("  flushedyo skills list | read <p> <n> [--json]   List or read plugin skill documents.");
+    writer.WriteLine("  flushedyo agents                                Show the agent-surface manifest as JSON.");
+    writer.WriteLine("  flushedyo tools list | read <p> <n> [--json]    List or read plugin tool documents.");
     writer.WriteLine("  flushedyo login [--plugin <name>] [--json]      Check that each plugin's credentials exist in the secret store.");
     writer.WriteLine("  flushedyo download [--plugin <name>] [--json]   Download transactions and store the new ones (deduplicated).");
     writer.WriteLine("  flushedyo status [--plugin <name>] [--json]     Show each plugin's last download and stored totals.");
     return isError ? 1 : 0;
 }
+
+

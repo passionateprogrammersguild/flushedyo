@@ -16,7 +16,6 @@ public sealed class PluginManifestParserTests
               "name": "fidelity",
               "version": "1.0.0",
               "capabilities": ["download-transactions", "download-holdings"],
-              "mcpServers": ["bitwarden", "playwright"],
               "skills": ["login", "navigate-accounts"],
               "tools": ["click", "type"]
             }
@@ -28,7 +27,6 @@ public sealed class PluginManifestParserTests
         Assert.Equal(
             [PluginCapability.DownloadTransactions, PluginCapability.DownloadHoldings],
             manifest.Capabilities.ToArray());
-        Assert.Equal(["bitwarden", "playwright"], manifest.McpServers.ToArray());
         Assert.Equal(["login", "navigate-accounts"], manifest.Skills.ToArray());
         Assert.Equal(["click", "type"], manifest.Tools.ToArray());
     }
@@ -39,7 +37,6 @@ public sealed class PluginManifestParserTests
         var manifest = PluginFileParser.ParseManifest(Minimal(), SourcePath);
 
         Assert.Empty(manifest.Capabilities);
-        Assert.Empty(manifest.McpServers);
         Assert.Empty(manifest.Skills);
         Assert.Empty(manifest.Tools);
     }

@@ -118,13 +118,46 @@ dotnet run --project src/FlushedYo.Cli -- status
 
 The ledger (`data/flushedyo.db`) is created lazily on the first command that needs it — `get-secret` and `plugins list` never touch the disk. Table output goes to **stdout**; logs, warnings, and errors go to **stderr** (`--json` yields structured output instead).
 
-### 5. Install (optional)
+### 5. Install as a .NET tool
 
-The CLI can be published as a self-contained tool for everyday use:
+flushedyo is packaged as a .NET tool (`PackageId` `FlushedYo`, command `flushedyo`). Install it from this checkout:
+
+```bash
+./scripts/install-tool.sh                    # pack + install globally
+./scripts/install-tool.sh --tool-path ~/bin  # pack + install into a directory
+./scripts/install-tool.sh --pack-only        # just produce dist/FlushedYo.<version>.nupkg
+```
+
+Then run it from anywhere:
+
+```bash
+flushedyo plugins list
+```
+
+Or drive the same three `dotnet` commands by hand:
+
+```bash
+dotnet pack src/FlushedYo.Cli -c Release -o ./dist
+dotnet tool install --global FlushedYo --add-source ./dist --version 1.0.0
+flushedyo plugins list
+```
+
+If `flushedyo` is not found after a global install, add `$HOME/.dotnet/tools` to `PATH` (`export PATH="$HOME/.dotnet/tools:$PATH"`). Upgrading means re-running the script, which uninstalls the previous version first; `dotnet tool uninstall --global FlushedYo` removes it.
+
+> **Point the tool at real data directories.** A relative `PluginDirectory` / `LedgerPath` resolves against the nearest ancestor of the *current* directory containing `flushedyo.slnx`, so a globally installed tool run outside a checkout falls back to the current directory. Set absolute paths once:
+>
+> ```bash
+> export FLUSHEDYO__PLUGINDIRECTORY="$HOME/.flushedyo/plugins"
+> export FLUSHEDYO__LEDGERPATH="$HOME/.flushedyo/data/flushedyo.db"
+> ```
+
+Publishing to a feed instead of a local package is the same metadata, published: `dotnet nuget push dist/FlushedYo.1.0.0.nupkg --api-key <key> --source https://api.nuget.org/v3/index.json`, after which `dotnet tool install --global FlushedYo` needs no `--add-source`.
+
+A framework-dependent `dotnet publish` is also still available if you want a loose binary:
 
 ```bash
 dotnet publish src/FlushedYo.Cli -c Release -o ./publish
-./publish/flushedyo plugins list
+./publish/FlushedYo.Cli plugins list
 ```
 
 ---
@@ -186,8 +219,9 @@ flushedyo/
 │   └── c4/                      # C4 diagrams (.drawio sources + .png exports)
 ├── specs/                       # Feature specs (board + numbered specs)
 ├── src/
-│   ├── FlushedYo.Cli/           # Entry point: Program.cs (DI + routing), appsettings.json
+│   ├── FlushedYo.Cli/           # Entry point: Program.cs (DI + routing), appsettings.json — packs as the `flushedyo` tool
 │   └── FlushedYo.Core/          # Configuration, SecretStore, Plugin, Tracking, Store, Models, Commands
+├── scripts/                     # bw-unlock.sh, generate-coverage.sh, install-tool.sh
 ├── tests/
 │   ├── FlushedYo.Core.Tests/            # Unit tests (xUnit v3)
 │   ├── FlushedYo.Core.PropertyTests/    # FsCheck property tests

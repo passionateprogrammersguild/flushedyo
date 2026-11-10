@@ -4,7 +4,6 @@
   "capabilities": [
     "download-transactions"
   ],
-  "mcpServers": [],
   "skills": [
     "login",
     "accounts",

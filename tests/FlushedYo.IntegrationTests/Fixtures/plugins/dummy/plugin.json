@@ -2,7 +2,6 @@
   "name": "dummy",
   "version": "1.0.0",
   "capabilities": ["download-transactions", "download-holdings"],
-  "mcpServers": ["bitwarden"],
   "skills": ["login"],
   "tools": ["click"]
 }

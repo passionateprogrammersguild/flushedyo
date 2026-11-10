@@ -82,7 +82,6 @@ public static partial class PluginFileParser
             capabilities.Add(capability);
         }
 
-        var mcpServers = ParseStringList(dto.McpServers, "mcpServers", sourcePath);
         var skills = ParseStringList(dto.Skills, "skills", sourcePath);
         var tools = ParseStringList(dto.Tools, "tools", sourcePath);
 
@@ -96,7 +95,6 @@ public static partial class PluginFileParser
             Name = dto.Name,
             Version = dto.Version,
             Capabilities = capabilities,
-            McpServers = mcpServers,
             Skills = skills,
             Tools = tools,
             Assembly = dto.Assembly is null ? null : ParseAssemblyPath(dto.Assembly, sourcePath),
@@ -228,8 +226,6 @@ public static partial class PluginFileParser
         public string? Version { get; set; }
 
         public List<string?>? Capabilities { get; set; }
-
-        public List<string?>? McpServers { get; set; }
 
         public List<string?>? Skills { get; set; }
 
