@@ -45,40 +45,7 @@ public sealed partial class BitwardenMcpSecretStore : ISecretStore
         _clientFactory = clientFactory ?? throw new ArgumentNullException(nameof(clientFactory));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
 
-        ValidateOptions();
-    }
-
-    private void ValidateOptions()
-    {
-        if (string.IsNullOrWhiteSpace(_options.Command) && string.IsNullOrWhiteSpace(_options.Url))
-        {
-            throw new SecretStoreException(
-                "The BitwardenMcp secret store requires either Command (stdio launch) or Url (HTTP endpoint) to be configured.");
-        }
-
-        if (!string.IsNullOrWhiteSpace(_options.Url))
-        {
-            if (!Uri.TryCreate(_options.Url, UriKind.Absolute, out var uri) || (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
-            {
-                throw new SecretStoreException($"The BitwardenMcp Url '{_options.Url}' must be an absolute HTTP or HTTPS URI.");
-            }
-        }
-
-        if (string.IsNullOrWhiteSpace(_options.Url))
-        {
-            foreach (var (name, value) in _options.EnvironmentVariables)
-            {
-                var matches = EnvironmentVariablePattern().Matches(value);
-                foreach (Match match in matches)
-                {
-                    var varName = match.Groups["Name"].Value;
-                    if (string.IsNullOrEmpty(Environment.GetEnvironmentVariable(varName)))
-                    {
-                        throw new SecretStoreException($"Environment variable {varName} is not set; run 'bw unlock' and export {varName}.");
-                    }
-                }
-            }
-        }
+        BitwardenMcpOptionsValidator.Validate(_options);
     }
 
     public async Task<string?> GetSecretAsync(string key, CancellationToken cancellationToken = default)
@@ -93,10 +60,35 @@ public sealed partial class BitwardenMcpSecretStore : ISecretStore
         using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         connectCts.CancelAfter(TimeSpan.FromSeconds(_options.ConnectTimeoutSeconds));
 
-        McpClient? client = null;
+        var client = await ConnectAsync(connectCts, cancellationToken);
+
         try
         {
-            client = await _clientFactory(connectCts.Token);
+            await using (client)
+            {
+                // Stop the connect timer so it doesn't kill the session.
+                connectCts.CancelAfter(Timeout.InfiniteTimeSpan);
+
+                await PerformPreflightCheckAsync(client, cancellationToken);
+
+                return await InvokeGetSecretAsync(client, key, cancellationToken);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            throw new SecretStoreException($"Timed out after {_options.CallTimeoutSeconds}s waiting for Bitwarden MCP tool '{_options.GetSecretTool}'.");
+        }
+        catch (Exception ex) when (ex is not (OperationCanceledException or SecretStoreException))
+        {
+            throw WrapCallException(ex);
+        }
+    }
+
+    private async Task<McpClient> ConnectAsync(CancellationTokenSource connectCts, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _clientFactory(connectCts.Token);
         }
         catch (OperationCanceledException) when (connectCts.IsCancellationRequested && !cancellationToken.IsCancellationRequested)
         {
@@ -110,54 +102,48 @@ public sealed partial class BitwardenMcpSecretStore : ISecretStore
         {
             throw WrapConnectionException(ex, _options.Command ?? "Unknown");
         }
+    }
 
-        try
+    private async Task<string?> InvokeGetSecretAsync(McpClient client, string key, CancellationToken cancellationToken)
+    {
+        using var callCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        callCts.CancelAfter(TimeSpan.FromSeconds(_options.CallTimeoutSeconds));
+
+        var arguments = BuildToolArguments(key);
+        var result = await client.CallToolAsync(_options.GetSecretTool, arguments, cancellationToken: callCts.Token);
+
+        if (result.IsError is true)
         {
-            await using (client)
-            {
-                // Fix: Stop the connect timer so it doesn't kill the session
-                connectCts.CancelAfter(Timeout.InfiniteTimeSpan);
-
-                // Preflight: Check if vault is locked
-                await PerformPreflightCheckAsync(client, cancellationToken);
-
-                using var callCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                callCts.CancelAfter(TimeSpan.FromSeconds(_options.CallTimeoutSeconds));
-
-                var arguments = new Dictionary<string, object?>(StringComparer.Ordinal);
-                foreach (var (name, value) in _options.ToolArguments)
-                {
-                    arguments[name] = value;
-                }
-
-                arguments[_options.SecretKeyArgument] = key;
-
-                var result = await client.CallToolAsync(_options.GetSecretTool, arguments, cancellationToken: callCts.Token);
-
-                if (result.IsError is true)
-                {
-                    var errorText = result.Content.OfType<TextContentBlock>().FirstOrDefault()?.Text;
-                    if (IsNotFound(errorText))
-                    {
-                        return null;
-                    }
-                    throw new SecretStoreException(
-                        $"Bitwarden MCP tool '{_options.GetSecretTool}' failed for '{key}'" +
-                        (string.IsNullOrWhiteSpace(errorText) ? "." : $": {errorText}"));
-                }
-
-                var text = string.Join(Environment.NewLine, result.Content.OfType<TextContentBlock>().Select(block => block.Text));
-                return string.IsNullOrWhiteSpace(text) ? null : text;
-            }
+            return InterpretErrorResult(key, result);
         }
-        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+
+        var text = string.Join(Environment.NewLine, result.Content.OfType<TextContentBlock>().Select(block => block.Text));
+        return string.IsNullOrWhiteSpace(text) ? null : text;
+    }
+
+    private Dictionary<string, object?> BuildToolArguments(string key)
+    {
+        var arguments = new Dictionary<string, object?>(StringComparer.Ordinal);
+        foreach (var (name, value) in _options.ToolArguments)
         {
-            throw new SecretStoreException($"Timed out after {_options.CallTimeoutSeconds}s waiting for Bitwarden MCP tool '{_options.GetSecretTool}'.");
+            arguments[name] = value;
         }
-        catch (Exception ex) when (ex is not (OperationCanceledException or SecretStoreException))
+
+        arguments[_options.SecretKeyArgument] = key;
+        return arguments;
+    }
+
+    private string? InterpretErrorResult(string key, CallToolResult result)
+    {
+        var errorText = result.Content.OfType<TextContentBlock>().FirstOrDefault()?.Text;
+        if (IsNotFound(errorText))
         {
-            throw WrapCallException(ex);
+            return null;
         }
+
+        throw new SecretStoreException(
+            $"Bitwarden MCP tool '{_options.GetSecretTool}' failed for '{key}'" +
+            (string.IsNullOrWhiteSpace(errorText) ? "." : $": {errorText}"));
     }
 
     private async Task PerformPreflightCheckAsync(McpClient client, CancellationToken ct)
@@ -169,40 +155,10 @@ public sealed partial class BitwardenMcpSecretStore : ISecretStore
 
         try
         {
-            var result = await client.CallToolAsync(_options.PreflightStatusTool, new Dictionary<string, object?>(), cancellationToken: preflightCts.Token);
-            if (result.IsError == true) return;
-
-            var text = string.Join(" ", result.Content.OfType<TextContentBlock>().Select(b => b.Text));
+            var text = await ReadPreflightTextAsync(client, preflightCts.Token);
             if (string.IsNullOrWhiteSpace(text)) return;
 
-            // Try JSON parsing first
-            try
-            {
-                using var doc = JsonDocument.Parse(text);
-                if (doc.RootElement.TryGetProperty("status", out var statusProp))
-                {
-                    var status = statusProp.GetString();
-                    if (string.Equals(status, "locked", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(status, "unauthenticated", StringComparison.OrdinalIgnoreCase))
-                    {
-                        throw new SecretStoreException("Bitwarden vault is locked. Run 'bw unlock --raw' and export BW_SESSION.");
-                    }
-                }
-            }
-            catch (JsonException)
-            {
-                // Fallback to regex for non-JSON or malformed JSON
-                var match = StatusRegex().Match(text);
-                if (match.Success)
-                {
-                    var status = match.Groups["s"].Value;
-                    if (string.Equals(status, "locked", StringComparison.OrdinalIgnoreCase) ||
-                        string.Equals(status, "unauthenticated", StringComparison.OrdinalIgnoreCase))
-                    {
-                        throw new SecretStoreException("Bitwarden vault is locked. Run 'bw unlock --raw' and export BW_SESSION.");
-                    }
-                }
-            }
+            ThrowIfLocked(TryDetectLockedStatus(text));
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
@@ -214,6 +170,53 @@ public sealed partial class BitwardenMcpSecretStore : ISecretStore
         }
         catch (SecretStoreException) { throw; }
         catch { /* Ignore other preflight failures and proceed to the actual call */ }
+    }
+
+    private async Task<string> ReadPreflightTextAsync(McpClient client, CancellationToken ct)
+    {
+        var result = await client.CallToolAsync(_options.PreflightStatusTool, new Dictionary<string, object?>(), cancellationToken: ct);
+        if (result.IsError == true) return string.Empty;
+
+        return string.Join(" ", result.Content.OfType<TextContentBlock>().Select(b => b.Text));
+    }
+
+    /// <summary>Returns the reported status when the vault is locked, otherwise null.</summary>
+    internal static string? TryDetectLockedStatus(string text)
+    {
+        try
+        {
+            return TryDetectLockedFromJson(text);
+        }
+        catch (JsonException)
+        {
+            // Fallback to regex for non-JSON or malformed JSON
+            return TryDetectLockedFromRegex(text);
+        }
+    }
+
+    internal static string? TryDetectLockedFromJson(string text)
+    {
+        using var doc = JsonDocument.Parse(text);
+        if (!doc.RootElement.TryGetProperty("status", out var statusProp)) return null;
+        return IsLockedStatus(statusProp.GetString()) ? statusProp.GetString() : null;
+    }
+
+    internal static string? TryDetectLockedFromRegex(string text)
+    {
+        var match = StatusRegex().Match(text);
+        return match.Success && IsLockedStatus(match.Groups["s"].Value) ? match.Groups["s"].Value : null;
+    }
+
+    private static bool IsLockedStatus(string? status)
+        => string.Equals(status, "locked", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(status, "unauthenticated", StringComparison.OrdinalIgnoreCase);
+
+    private static void ThrowIfLocked(string? status)
+    {
+        if (status is not null)
+        {
+            throw new SecretStoreException("Bitwarden vault is locked. Run 'bw unlock --raw' and export BW_SESSION.");
+        }
     }
 
     private static bool IsNotFound(string? text)
@@ -332,7 +335,7 @@ public sealed partial class BitwardenMcpSecretStore : ISecretStore
     }
 
     [GeneratedRegex(@"\$\{(?<Name>[A-Za-z_][A-Za-z0-9_]*)\}")]
-    private static partial Regex EnvironmentVariablePattern();
+    internal static partial Regex EnvironmentVariablePattern();
 
     [GeneratedRegex(@"\bnot found\b", RegexOptions.IgnoreCase)]
     private static partial Regex NotFoundRegex();
