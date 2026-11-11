@@ -1,4 +1,5 @@
-﻿using FlushedYo.Core.Commands;
+﻿using FlushedYo.Cli;
+using FlushedYo.Core.Commands;
 using FlushedYo.Core.Configuration;
 using FlushedYo.Core.Plugin;
 using FlushedYo.Core.SecretStore;
@@ -142,7 +143,9 @@ try
 
     if (args[0].Equals("skills", StringComparison.OrdinalIgnoreCase) || args[0].Equals("tools", StringComparison.OrdinalIgnoreCase))
     {
-        return AgentSurfaceRouting(args[1..], args[0], host.Services, Console.Out, Console.Error, cts.Token);
+        var input = new AgentSurfaceRouter.Input(args[1..], args[0]);
+        var writers = new AgentSurfaceRouter.Writers(Console.Out, Console.Error, () => PrintUsage(isError: true));
+        return await AgentSurfaceRouter.RunAsync(input, host.Services, writers, cts.Token);
     }
 
     if (args[0].Equals("login", StringComparison.OrdinalIgnoreCase))
@@ -191,61 +194,6 @@ async Task<int> RunCommandAsync<TCommand>(Func<TCommand, CommandLineOptions, Tas
     return await run(host.Services.GetRequiredService<TCommand>(), options);
 }
 
-static int AgentSurfaceRouting(string[] subArgs, string command, IServiceProvider services, TextWriter output, TextWriter error, CancellationToken token)
-{
-    static int RunSync(Func<Task<int>> func)
-    {
-        try
-        {
-            return func().GetAwaiter().GetResult();
-        }
-        catch (OperationCanceledException)
-        {
-            return 130;
-        }
-    }
-
-    if (subArgs.Length == 0 || (subArgs[0] != "list" && subArgs[0] != "read"))
-    {
-        error.WriteLine($"Usage: flushedyo {command} list | read <plugin> <name> [--json]");
-        return PrintUsage(isError: true);
-    }
-
-    var surface = services.GetRequiredService<AgentSurfaceCommand>();
-    var json = subArgs.Contains("--json", StringComparer.OrdinalIgnoreCase);
-    var rest = subArgs.Where(static (arg, _) => !arg.Equals("--json", StringComparison.OrdinalIgnoreCase)).ToArray();
-
-    if (rest[0] == "list")
-    {
-        if (rest.Length > 1)
-        {
-            error.WriteLine($"Unexpected arguments for flushedyo {command} list.");
-            return PrintUsage(isError: true);
-        }
-
-        return command.Equals("skills", StringComparison.OrdinalIgnoreCase)
-            ? RunSync(() => surface.ExecuteSkillsAsync(new CommandLineOptions(null, json), null, output, error, token))
-            : RunSync(() => surface.ExecuteToolsAsync(new CommandLineOptions(null, json), null, output, error, token));
-    }
-
-    if (rest[0] == "read")
-    {
-        if (rest.Length < 3)
-        {
-            error.WriteLine($"Usage: flushedyo {command} read <plugin> <name> [--json]");
-            return PrintUsage(isError: true);
-        }
-
-        var options = new CommandLineOptions(rest[1], json);
-        return command.Equals("skills", StringComparison.OrdinalIgnoreCase)
-            ? RunSync(() => surface.ExecuteSkillsAsync(options, rest[2], output, error, token))
-            : RunSync(() => surface.ExecuteToolsAsync(options, rest[2], output, error, token));
-    }
-
-    error.WriteLine($"Unknown {command} subcommand '{rest[0]}'.");
-    return PrintUsage(isError: true);
-}
-
 static int PrintUsage(bool isError = false)
 {
     var writer = isError ? Console.Error : Console.Out;
@@ -263,5 +211,4 @@ static int PrintUsage(bool isError = false)
     writer.WriteLine("  flushedyo status [--plugin <name>] [--json]     Show each plugin's last download and stored totals.");
     return isError ? 1 : 0;
 }
-
 
