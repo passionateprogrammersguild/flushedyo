@@ -1,7 +1,4 @@
 {
   "headless": false,
-  "credentialKeys": {
-    "username": "fidelity/username",
-    "password": "fidelity/password"
-  }
+  "credentialKey": "fidelity/mmann"
 }

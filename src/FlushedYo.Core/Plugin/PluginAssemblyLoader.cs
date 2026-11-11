@@ -49,7 +49,8 @@ public sealed class PluginAssemblyLoader(ISecretStore secretStore, ILoggerFactor
         var succeeded = false;
         try
         {
-            var plugin = Construct(context, assemblyPath, descriptor, manifest.Assembly, manifest.Type);
+            var target = new PluginAssemblyTarget(assemblyPath, manifest.Assembly, manifest.Type, descriptor);
+            var plugin = Construct(context, target);
             succeeded = true;
             return new LoadedPlugin(plugin, context);
         }
@@ -62,40 +63,51 @@ public sealed class PluginAssemblyLoader(ISecretStore secretStore, ILoggerFactor
         }
     }
 
-    private IProviderPlugin Construct(
-        PluginLoadContext context,
-        string assemblyPath,
-        PluginDescriptor descriptor,
-        string assemblyName,
-        string typeName)
+    private IProviderPlugin Construct(PluginLoadContext context, PluginAssemblyTarget target)
     {
-        var name = descriptor.Name;
+        var type = LoadType(context, target);
+        RequirePublicConcretePlugin(type, target.TypeName);
+        var constructor = RequirePluginContextConstructor(type, target.TypeName);
+        return InvokeAndVerify(constructor, target);
+    }
 
+    private static Type LoadType(PluginLoadContext context, PluginAssemblyTarget target)
+    {
         Type? type;
         try
         {
-            type = context.LoadFromAssemblyPath(assemblyPath).GetType(typeName, throwOnError: false);
+            type = context.LoadFromAssemblyPath(target.AssemblyPath).GetType(target.TypeName, throwOnError: false);
         }
         catch (Exception ex) when (ex is BadImageFormatException or FileLoadException or FileNotFoundException or TypeLoadException)
         {
             throw new PluginLoadException(
-                $"Plugin '{name}' assembly '{assemblyName}' could not be loaded ({ex.GetType().Name}).",
+                $"Plugin '{target.Descriptor.Name}' assembly '{target.AssemblyName}' could not be loaded ({ex.GetType().Name}).",
                 ex);
         }
 
-        if (type is null)
-        {
-            throw new PluginLoadException($"Type '{typeName}' was not found in assembly '{assemblyName}'.");
-        }
+        return type ?? throw new PluginLoadException(
+            $"Type '{target.TypeName}' was not found in assembly '{target.AssemblyName}'.");
+    }
 
-        if (!type.IsPublic || type.IsAbstract || type.IsGenericTypeDefinition || !typeof(IProviderPlugin).IsAssignableFrom(type))
+    private static void RequirePublicConcretePlugin(Type type, string typeName)
+    {
+        if (!IsPublicConcretePlugin(type))
         {
             throw new PluginLoadException($"Type '{typeName}' is not a public, concrete IProviderPlugin.");
         }
+    }
 
-        var constructor = type.GetConstructor(BindingFlags.Public | BindingFlags.Instance, binder: null, [typeof(PluginContext)], modifiers: null)
-            ?? throw new PluginLoadException($"Type '{typeName}' needs a public constructor taking a PluginContext.");
+    private static bool IsPublicConcretePlugin(Type type) =>
+        type.IsPublic && !type.IsAbstract && !type.IsGenericTypeDefinition && typeof(IProviderPlugin).IsAssignableFrom(type);
 
+    private static ConstructorInfo RequirePluginContextConstructor(Type type, string typeName) =>
+        type.GetConstructor(BindingFlags.Public | BindingFlags.Instance, binder: null, [typeof(PluginContext)], modifiers: null)
+        ?? throw new PluginLoadException($"Type '{typeName}' needs a public constructor taking a PluginContext.");
+
+    private IProviderPlugin InvokeAndVerify(ConstructorInfo constructor, PluginAssemblyTarget target)
+    {
+        var descriptor = target.Descriptor;
+        var name = descriptor.Name;
         var pluginContext = new PluginContext(descriptor, secretStore, loggerFactory.CreateLogger("plugin." + name));
 
         IProviderPlugin plugin;
@@ -110,8 +122,7 @@ public sealed class PluginAssemblyLoader(ISecretStore secretStore, ILoggerFactor
             throw new PluginLoadException($"Plugin '{name}' failed to initialize ({ex.InnerException?.GetType().Name ?? "unknown"}).");
         }
 
-        if (!string.Equals(plugin.Name, name, StringComparison.OrdinalIgnoreCase)
-            || !string.Equals(plugin.Version, descriptor.Version, StringComparison.Ordinal))
+        if (!MatchesManifest(plugin, descriptor))
         {
             DisposeQuietly(plugin);
             throw new PluginLoadException($"Plugin '{name}' reports a name or version that does not match its manifest.");
@@ -119,6 +130,16 @@ public sealed class PluginAssemblyLoader(ISecretStore secretStore, ILoggerFactor
 
         return plugin;
     }
+
+    private static bool MatchesManifest(IProviderPlugin plugin, PluginDescriptor descriptor) =>
+        string.Equals(plugin.Name, descriptor.Name, StringComparison.OrdinalIgnoreCase)
+        && string.Equals(plugin.Version, descriptor.Version, StringComparison.Ordinal);
+
+    private sealed record PluginAssemblyTarget(
+        string AssemblyPath,
+        string AssemblyName,
+        string TypeName,
+        PluginDescriptor Descriptor);
 
     private static void DisposeQuietly(IProviderPlugin plugin)
     {

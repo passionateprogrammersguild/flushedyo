@@ -58,12 +58,9 @@ Run from the repo root. All verified working.
 | Task          | Command                                                       |
 | ------------- | ------------------------------------------------------------- |
 | Build         | `dotnet build flushedyo.slnx` (expect 0 warnings)              |
-| Test          | `dotnet test --solution flushedyo.slnx` (xUnit v3 + MTP; all must pass) |
+| Test          | `dotnet test --filter-not-namespace "FlushedYo.IntegrationTests"` (xUnit v3 + MTP; all must pass) |
 | Format check  | `dotnet format flushedyo.slnx --verify-no-changes`             |
 | Unit tests    | `dotnet test --project tests/FlushedYo.Core.Tests`            |
-| Integration   | `dotnet test --project tests/FlushedYo.IntegrationTests --filter "Category!=Live&Category!=Network"` |
-| Live (real Bitwarden) | `dotnet test --project tests/FlushedYo.IntegrationTests --filter "Category=Live"` |
-| Network (real MCP server + stub `bw`) | `dotnet test --project tests/FlushedYo.IntegrationTests --filter "Category=Network"` |
 | Run CLI       | `dotnet run --project src/FlushedYo.Cli -- <args>`            |
 | Get a secret  | `dotnet run --project src/FlushedYo.Cli -- get-secret <key>`  |
 | List plugins  | `dotnet run --project src/FlushedYo.Cli -- plugins list`      |
@@ -139,12 +136,7 @@ plugins/  data/  src/FlushedYo.Plugins.*   # not created yet: real plugins arriv
 - Concurrency tests (parallel inserts) must be stable: run them repeatedly before declaring done. Tests that need a case-sensitive filesystem use `Assert.SkipWhen` (the duplicate-plugin-name test skips on default macOS).
 
 ## Integration, Live and Network tests
-
-- Integration tests launch the fake MCP server and the built CLI as child processes via `HelperPaths`; run `dotnet build flushedyo.slnx` first. They use the public `BitwardenMcpSecretStore` constructor.
-- **Live** (`[LiveBitwardenFact]`, `Category=Live`) hits the real vault through `npx @bitwarden/mcp-server`. It needs a Login item named `testconnection` with a password and an exported `BW_SESSION`. Policy: unset `BW_SESSION` or a locked vault **fails** the test (with an unlock hint) rather than skipping. Skipped only if `node`/`npx`/`bw` are missing.
-- **Network** (`Category=Network`) runs the real `@bitwarden/mcp-server` against a stub `bw` script on PATH; skipped without `npx` and on Windows.
-- Tests that mutate process environment use `[Collection("EnvironmentMutation")]` — in both test projects, since the variables are process-wide and collections otherwise run concurrently.
-- stdout is reserved for command output; logs and errors go to stderr.
+Do NOT run integration tests.  Integration tests require user input and cannot be run agentically
 
 ## Gotchas (past regressions — do not reintroduce)
 

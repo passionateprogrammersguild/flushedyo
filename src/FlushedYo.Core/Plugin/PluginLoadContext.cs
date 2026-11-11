@@ -19,15 +19,18 @@ internal sealed class PluginLoadContext(string assemblyPath)
 
     protected override Assembly? Load(AssemblyName assemblyName)
     {
-        var name = assemblyName.Name;
-        if (name is CoreAssemblyName || (name is not null && name.StartsWith(SharedPrefix, StringComparison.Ordinal)))
+        if (IsHostSharedAssembly(assemblyName.Name))
         {
             return null;
         }
 
-        var path = _resolver.ResolveAssemblyToPath(assemblyName);
-        return path is null ? null : LoadFromAssemblyPath(path);
+        return ResolvePath(_resolver.ResolveAssemblyToPath(assemblyName));
     }
+
+    private static bool IsHostSharedAssembly(string? name) =>
+        name is CoreAssemblyName || (name is not null && name.StartsWith(SharedPrefix, StringComparison.Ordinal));
+
+    private Assembly? ResolvePath(string? path) => path is null ? null : LoadFromAssemblyPath(path);
 
     protected override IntPtr LoadUnmanagedDll(string unmanagedDllName)
     {

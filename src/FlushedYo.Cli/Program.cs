@@ -1,5 +1,4 @@
-﻿using FlushedYo.Cli;
-using FlushedYo.Core.Commands;
+﻿using FlushedYo.Core.Commands;
 using FlushedYo.Core.Configuration;
 using FlushedYo.Core.Plugin;
 using FlushedYo.Core.SecretStore;

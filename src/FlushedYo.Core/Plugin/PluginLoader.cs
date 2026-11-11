@@ -27,30 +27,39 @@ public sealed partial class PluginLoader(IOptions<FlushedYoOptions> options, ILo
             return Task.FromResult<IReadOnlyList<PluginDescriptor>>([]);
         }
 
-        var loaded = new List<PluginDescriptor>();
-        var folders = Directory.EnumerateDirectories(root)
-            .OrderBy(static path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase);
+        var loaded = LoadAll(root, cancellationToken);
+        var survivors = RemoveDuplicateNames(loaded);
+        return Task.FromResult<IReadOnlyList<PluginDescriptor>>(SortByName(survivors));
+    }
 
-        foreach (var folder in folders)
+    private List<PluginDescriptor> LoadAll(string root, CancellationToken cancellationToken)
+    {
+        var loaded = new List<PluginDescriptor>();
+        foreach (var folder in EnumeratePluginFolders(root))
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var folderName = Path.GetFileName(folder);
-            if (folderName.StartsWith('.'))
+            var result = TryLoad(folder);
+            if (result.Descriptor is not { } descriptor)
             {
-                continue;
-            }
-
-            var descriptor = TryLoad(folder, folderName, out var failure);
-            if (descriptor is null)
-            {
-                LogSkipped(logger, folderName, failure!);
+                LogSkipped(logger, folder.Name, result.Failure!);
                 continue;
             }
 
             loaded.Add(descriptor);
         }
 
+        return loaded;
+    }
+
+    private static IEnumerable<PluginFolder> EnumeratePluginFolders(string root) =>
+        Directory.EnumerateDirectories(root)
+            .OrderBy(static path => Path.GetFileName(path), StringComparer.OrdinalIgnoreCase)
+            .Where(static folder => !Path.GetFileName(folder).StartsWith('.'))
+            .Select(static folder => new PluginFolder(folder, Path.GetFileName(folder)));
+
+    private List<PluginDescriptor> RemoveDuplicateNames(List<PluginDescriptor> loaded)
+    {
         var duplicateNames = loaded
             .GroupBy(static plugin => plugin.Name, StringComparer.OrdinalIgnoreCase)
             .Where(static group => group.Count() > 1)
@@ -69,62 +78,66 @@ public sealed partial class PluginLoader(IOptions<FlushedYoOptions> options, ILo
             survivors.Add(plugin);
         }
 
-        survivors.Sort(static (left, right) => string.CompareOrdinal(left.Name, right.Name));
-        return Task.FromResult<IReadOnlyList<PluginDescriptor>>(survivors);
+        return survivors;
     }
 
-    private static PluginDescriptor? TryLoad(string folder, string folderName, out string? failure)
+    private static List<PluginDescriptor> SortByName(List<PluginDescriptor> plugins)
     {
-        var manifestPath = Path.Combine(folder, ManifestFileName);
+        plugins.Sort(static (left, right) => string.CompareOrdinal(left.Name, right.Name));
+        return plugins;
+    }
+
+    private static PluginLoadResult TryLoad(PluginFolder folder)
+    {
+        var manifestPath = Path.Combine(folder.Path, ManifestFileName);
         if (!File.Exists(manifestPath))
         {
-            failure = $"'{manifestPath}' not found.";
-            return null;
+            return PluginLoadResult.Failed($"'{manifestPath}' not found.");
         }
 
         try
         {
             var manifest = PluginFileParser.ParseManifest(File.ReadAllText(manifestPath), manifestPath);
 
-            if (!string.Equals(folderName, manifest.Name, StringComparison.OrdinalIgnoreCase))
+            if (!string.Equals(folder.Name, manifest.Name, StringComparison.OrdinalIgnoreCase))
             {
-                failure = $"folder name '{folderName}' does not match manifest name '{manifest.Name}'.";
-                return null;
+                return PluginLoadResult.Failed($"folder name '{folder.Name}' does not match manifest name '{manifest.Name}'.");
             }
 
             var configuration = PluginConfiguration.Default;
-            var configurationPath = Path.Combine(folder, ConfigurationFileName);
+            var configurationPath = Path.Combine(folder.Path, ConfigurationFileName);
             if (File.Exists(configurationPath))
             {
                 configuration = PluginFileParser.ParseConfiguration(File.ReadAllText(configurationPath), configurationPath);
             }
 
-            failure = FindMissingEntry(folder, "skills", manifest.Skills)
-                ?? FindMissingEntry(folder, "tools", manifest.Tools)
-                ?? FindMissingAssembly(folder, manifest);
-            return failure is null ? new PluginDescriptor(manifest, configuration, Path.GetFullPath(folder)) : null;
+            if (FirstMissingRequirement(folder, manifest) is { } failure)
+            {
+                return PluginLoadResult.Failed(failure);
+            }
+
+            var descriptor = new PluginDescriptor(manifest, configuration, Path.GetFullPath(folder.Path));
+            return new PluginLoadResult(descriptor, null);
         }
         catch (PluginFileException ex)
         {
-            failure = ex.Message;
-            return null;
+            return PluginLoadResult.Failed(ex.Message);
         }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         {
-            failure = $"could not read plugin files: {ex.Message}";
-            return null;
+            return PluginLoadResult.Failed($"could not read plugin files: {ex.Message}");
         }
     }
 
     // Discovery only checks the file exists; it never loads or inspects the assembly.
-    private static string? FindMissingAssembly(string folder, PluginManifest manifest)
+    private static string? FindMissingAssembly(PluginFolder folder, PluginManifest manifest)
     {
         if (manifest.Assembly is null)
         {
             return null;
         }
 
-        var folderPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder));
+        var folderPath = Path.TrimEndingDirectorySeparator(Path.GetFullPath(folder.Path));
         var assemblyPath = Path.GetFullPath(Path.Combine(folderPath, manifest.Assembly));
 
         // The parser already rejects '..'; this is defence in depth.
@@ -136,23 +149,57 @@ public sealed partial class PluginLoader(IOptions<FlushedYoOptions> options, ILo
         return File.Exists(assemblyPath) ? null : $"assembly '{manifest.Assembly}' not found.";
     }
 
-    private static string? FindMissingEntry(string folder, string subfolder, IReadOnlyList<string> entries)
+    private static string? FirstMissingRequirement(PluginFolder folder, PluginManifest manifest)
     {
-        foreach (var entry in entries)
+        EntryRequirement[] requirements =
+        [
+            new("skills", manifest.Skills),
+            new("tools", manifest.Tools),
+        ];
+
+        foreach (var requirement in requirements)
         {
-            if (entry == ".." || entry.AsSpan().IndexOfAny('/', '\\') >= 0)
+            if (FindMissingEntry(folder, requirement) is { } missing)
             {
-                return $"{subfolder} entry '{entry}' must be a plain name, not a path.";
+                return missing;
+            }
+        }
+
+        return FindMissingAssembly(folder, manifest);
+    }
+
+    private static string? FindMissingEntry(PluginFolder folder, EntryRequirement requirement)
+    {
+        foreach (var entry in requirement.Entries)
+        {
+            if (!IsPlainName(entry))
+            {
+                return $"{requirement.Subfolder} entry '{entry}' must be a plain name, not a path.";
             }
 
-            var basePath = Path.Combine(folder, subfolder, entry);
-            if (!File.Exists(basePath) && !Directory.Exists(basePath) && !File.Exists(basePath + ".md"))
+            var basePath = Path.Combine(folder.Path, requirement.Subfolder, entry);
+            if (!EntryExists(basePath))
             {
-                return $"{subfolder} entry '{entry}' not found in '{Path.Combine(folder, subfolder)}'.";
+                return $"{requirement.Subfolder} entry '{entry}' not found in '{Path.Combine(folder.Path, requirement.Subfolder)}'.";
             }
         }
 
         return null;
+    }
+
+    private static bool IsPlainName(string entry) =>
+        entry != ".." && entry.AsSpan().IndexOfAny('/', '\\') < 0;
+
+    private static bool EntryExists(string basePath) =>
+        File.Exists(basePath) || Directory.Exists(basePath) || File.Exists(basePath + ".md");
+
+    private sealed record PluginFolder(string Path, string Name);
+
+    private sealed record EntryRequirement(string Subfolder, IReadOnlyList<string> Entries);
+
+    private sealed record PluginLoadResult(PluginDescriptor? Descriptor, string? Failure)
+    {
+        public static PluginLoadResult Failed(string failure) => new(null, failure);
     }
 
     [LoggerMessage(Level = LogLevel.Information, Message = "Plugin directory '{Root}' does not exist; no plugins loaded.")]
