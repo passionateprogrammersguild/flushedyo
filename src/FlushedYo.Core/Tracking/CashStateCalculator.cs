@@ -1,3 +1,4 @@
+using System.Collections.Frozen;
 using FlushedYo.Core.Models;
 
 namespace FlushedYo.Core.Tracking;
@@ -35,42 +36,64 @@ public static class CashStateCalculator
             return ReconciliationNeeded(CashStateReason.AmbiguousTransaction);
         }
 
-        decimal movement = 0m;
+        if (TryAccumulateMovement(newlyInsertedTransactions, out var movement, out var failure))
+        {
+            return Complete(openingCashBalance, movement);
+        }
+
+        return ReconciliationNeeded(failure);
+    }
+
+    private static bool TryAccumulateMovement(
+        IEnumerable<AccountTransaction> newlyInsertedTransactions,
+        out decimal movement,
+        out CashStateReason failure)
+    {
+        movement = 0m;
         try
         {
             foreach (var accountTransaction in newlyInsertedTransactions)
             {
                 ArgumentNullException.ThrowIfNull(accountTransaction);
 
-                switch (accountTransaction.CashImpact)
+                // Fail closed: an unclassified impact must never contribute cash.
+                var (contributesCash, unresolvedReason) = ImpactRules.GetValueOrDefault(
+                    accountTransaction.CashImpact,
+                    (ContributesCash: false, UnresolvedReason: CashStateReason.AmbiguousTransaction));
+                if (unresolvedReason is { } reason)
                 {
-                    case CashImpact.CashAffecting:
-                        movement = checked(movement + accountTransaction.Transaction.Amount);
-                        break;
-                    case CashImpact.NotCashAffecting:
-                        break;
-                    case CashImpact.Unknown:
-                        return ReconciliationNeeded(CashStateReason.AmbiguousTransaction);
-                    case CashImpact.Correction:
-                        return ReconciliationNeeded(CashStateReason.Correction);
-                    case CashImpact.Unsupported:
-                        return ReconciliationNeeded(CashStateReason.UnsupportedActivity);
-                    default:
-                        return ReconciliationNeeded(CashStateReason.AmbiguousTransaction);
+                    failure = reason;
+                    return false;
                 }
+
+                movement = checked(movement + (contributesCash ? accountTransaction.Transaction.Amount : 0m));
             }
 
-            if (openingCashBalance is null)
-            {
-                return new CashState(
-                    CashStateStatus.Unknown,
-                    CashStateReason.MissingBaseline,
-                    OpeningCashBalance: null,
-                    CashBalance: null,
-                    Difference: null);
-            }
+            failure = CashStateReason.None;
+            return true;
+        }
+        catch (OverflowException)
+        {
+            failure = CashStateReason.ArithmeticOverflow;
+            return false;
+        }
+    }
 
-            var opening = openingCashBalance.Value;
+    private static CashState Complete(decimal? openingCashBalance, decimal movement)
+    {
+        if (openingCashBalance is null)
+        {
+            return new CashState(
+                CashStateStatus.Unknown,
+                CashStateReason.MissingBaseline,
+                OpeningCashBalance: null,
+                CashBalance: null,
+                Difference: null);
+        }
+
+        var opening = openingCashBalance.Value;
+        try
+        {
             var balance = checked(opening + movement);
             return new CashState(CashStateStatus.Known, CashStateReason.None, opening, balance, movement);
         }
@@ -82,4 +105,15 @@ public static class CashStateCalculator
 
     private static CashState ReconciliationNeeded(CashStateReason reason) =>
         new(CashStateStatus.ReconciliationNeeded, reason, OpeningCashBalance: null, CashBalance: null, Difference: null);
+
+    /// <summary>Per-impact rule: whether the amount contributes cash and which unresolved reason, if any, applies.</summary>
+    private static readonly FrozenDictionary<CashImpact, (bool ContributesCash, CashStateReason? UnresolvedReason)> ImpactRules =
+        new Dictionary<CashImpact, (bool, CashStateReason?)>
+        {
+            [CashImpact.CashAffecting] = (true, null),
+            [CashImpact.NotCashAffecting] = (false, null),
+            [CashImpact.Unknown] = (false, CashStateReason.AmbiguousTransaction),
+            [CashImpact.Correction] = (false, CashStateReason.Correction),
+            [CashImpact.Unsupported] = (false, CashStateReason.UnsupportedActivity),
+        }.ToFrozenDictionary();
 }

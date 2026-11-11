@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Collections.Frozen;
 using FlushedYo.Core.Models;
 using FlushedYo.Core.Tracking;
 using Microsoft.Data.Sqlite;
@@ -38,17 +39,19 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
 
         await using var connection = await database.OpenAsync(cancellationToken).ConfigureAwait(false);
         using var transaction = connection.BeginTransaction(deferred: false);
-        var accountId = await EnsureAccountAsync(connection, transaction, prepared, cancellationToken).ConfigureAwait(false);
-        var previous = await ReadProgressAsync(connection, transaction, accountId, cancellationToken).ConfigureAwait(false);
+        var scope = new LedgerScope(connection, transaction, AccountId: 0);
+        var accountId = await EnsureAccountAsync(scope, prepared, cancellationToken).ConfigureAwait(false);
+        scope = scope with { AccountId = accountId };
+        var previous = await ReadProgressAsync(scope, cancellationToken).ConfigureAwait(false);
 
         var inserted = new List<AccountTransaction>();
         var skipped = 0;
-        await using var insertCommand = CreateInsertCommand(connection, transaction, accountId, prepared);
-        await using var duplicateCommand = CreateDuplicateCommand(connection, transaction);
+        await using var insertCommand = CreateInsertCommand(scope, prepared);
+        await using var duplicateCommand = CreateDuplicateCommand(scope);
         foreach (var item in prepared.Transactions)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            if (await InsertTransactionAsync(connection, transaction, accountId, insertCommand, item, cancellationToken).ConfigureAwait(false))
+            if (await InsertTransactionAsync(scope, insertCommand, item, cancellationToken).ConfigureAwait(false))
             {
                 inserted.Add(item.Value);
                 afterTransactionInsert?.Invoke();
@@ -62,25 +65,14 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
 
         var cashState = CalculateCashState(prepared, previous, inserted);
         var latestSafeDate = CalculateLatestSafeDate(prepared, previous);
+        var checkpoint = new CashCheckpoint(latestSafeDate, cashState);
         var importId = await InsertImportAsync(
-            connection,
-            transaction,
-            accountId,
+            scope,
             prepared,
-            inserted.Count,
-            skipped,
-            latestSafeDate,
-            cashState,
+            new ImportCounts(inserted.Count, skipped),
+            checkpoint,
             cancellationToken).ConfigureAwait(false);
-        await UpsertProgressAsync(
-            connection,
-            transaction,
-            accountId,
-            importId,
-            prepared.ImportedAt,
-            latestSafeDate,
-            cashState,
-            cancellationToken).ConfigureAwait(false);
+        await UpsertProgressAsync(scope, importId, prepared.ImportedAt, checkpoint, cancellationToken).ConfigureAwait(false);
 
         cancellationToken.ThrowIfCancellationRequested();
         transaction.Commit();
@@ -216,25 +208,46 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
         return transactions;
     }
 
-    /// <inheritdoc />
-    public async Task<DateOnly?> GetLatestSafeDateAsync(Account account, CancellationToken cancellationToken = default)
+    /// <summary>
+    /// Opens a connection and builds a command against <c>account_progress</c> for the normalized
+    /// account; the SQL selects columns from the progress row joined through <c>accounts</c>.
+    /// </summary>
+    private async Task<ProgressRead> CreateProgressReadAsync(string sql, Account account, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         var normalized = AccountTransactionHasher.NormalizeAccount(account);
 
-        await using var connection = await database.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = connection.CreateCommand();
-        command.CommandText =
+        var connection = await database.OpenAsync(cancellationToken).ConfigureAwait(false);
+        var command = connection.CreateCommand();
+        command.CommandText = sql;
+        command.Parameters.AddWithValue("$institution", normalized.Institution);
+        command.Parameters.AddWithValue("$accountKey", normalized.AccountKey);
+        return new ProgressRead(connection, command);
+    }
+
+    private sealed record ProgressRead(SqliteConnection Connection, SqliteCommand Command) : IAsyncDisposable
+    {
+        public async ValueTask DisposeAsync()
+        {
+            await Command.DisposeAsync().ConfigureAwait(false);
+            await Connection.DisposeAsync().ConfigureAwait(false);
+        }
+    }
+
+    /// <inheritdoc />
+    public async Task<DateOnly?> GetLatestSafeDateAsync(Account account, CancellationToken cancellationToken = default)
+    {
+        await using var read = await CreateProgressReadAsync(
             """
             SELECT p.latest_safe_date
             FROM account_progress AS p
             INNER JOIN accounts AS a ON a.id = p.account_id
             WHERE a.institution = $institution AND a.account_key = $accountKey;
-            """;
-        command.Parameters.AddWithValue("$institution", normalized.Institution);
-        command.Parameters.AddWithValue("$accountKey", normalized.AccountKey);
+            """,
+            account,
+            cancellationToken).ConfigureAwait(false);
 
-        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        var value = await read.Command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return value is null or DBNull
             ? null
             : DateOnly.ParseExact((string)value, DateFormat, CultureInfo.InvariantCulture);
@@ -243,22 +256,17 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
     /// <inheritdoc />
     public async Task<CashState?> GetCashStateAsync(Account account, CancellationToken cancellationToken = default)
     {
-        cancellationToken.ThrowIfCancellationRequested();
-        var normalized = AccountTransactionHasher.NormalizeAccount(account);
-
-        await using var connection = await database.OpenAsync(cancellationToken).ConfigureAwait(false);
-        await using var command = connection.CreateCommand();
-        command.CommandText =
+        await using var read = await CreateProgressReadAsync(
             """
             SELECT p.cash_status, p.cash_reason, p.opening_cash_balance, p.cash_balance, p.cash_difference
             FROM account_progress AS p
             INNER JOIN accounts AS a ON a.id = p.account_id
             WHERE a.institution = $institution AND a.account_key = $accountKey;
-            """;
-        command.Parameters.AddWithValue("$institution", normalized.Institution);
-        command.Parameters.AddWithValue("$accountKey", normalized.AccountKey);
+            """,
+            account,
+            cancellationToken).ConfigureAwait(false);
 
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        await using var reader = await read.Command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
         if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             return null;
@@ -317,12 +325,10 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
             import.Rejected);
     }
 
-    private static async Task<long> EnsureAccountAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        PreparedImport import,
-        CancellationToken cancellationToken)
+    private static async Task<long> EnsureAccountAsync(LedgerScope scope, PreparedImport import, CancellationToken cancellationToken)
     {
+        var connection = scope.Connection;
+        var transaction = scope.Transaction;
         await using (var insert = connection.CreateCommand())
         {
             insert.Transaction = transaction;
@@ -348,42 +354,35 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
             : Convert.ToInt64(id, CultureInfo.InvariantCulture);
     }
 
-    private static async Task<AccountProgress?> ReadProgressAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long accountId,
-        CancellationToken cancellationToken)
+    private static async Task<AccountProgress?> ReadProgressAsync(LedgerScope scope, CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
+        await using var command = scope.Connection.CreateCommand();
+        command.Transaction = scope.Transaction;
         command.CommandText =
             """
             SELECT latest_safe_date, cash_status, cash_reason, opening_cash_balance, cash_balance, cash_difference
             FROM account_progress
             WHERE account_id = $accountId;
             """;
-        command.Parameters.AddWithValue("$accountId", accountId);
-
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        command.Parameters.AddWithValue("$accountId", scope.AccountId);
         {
-            return null;
-        }
+            await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+            if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                return null;
+            }
 
-        var latestSafeDate = reader.IsDBNull(0)
-            ? (DateOnly?)null
-            : DateOnly.ParseExact(reader.GetString(0), DateFormat, CultureInfo.InvariantCulture);
-        return new AccountProgress(latestSafeDate, ReadCashState(reader, statusColumn: 1));
+            var latestSafeDate = reader.IsDBNull(0)
+                ? (DateOnly?)null
+                : DateOnly.ParseExact(reader.GetString(0), DateFormat, CultureInfo.InvariantCulture);
+            return new AccountProgress(latestSafeDate, ReadCashState(reader, statusColumn: 1));
+        }
     }
 
-    private static SqliteCommand CreateInsertCommand(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long accountId,
-        PreparedImport import)
+    private static SqliteCommand CreateInsertCommand(LedgerScope scope, PreparedImport import)
     {
-        var command = connection.CreateCommand();
-        command.Transaction = transaction;
+        var command = scope.Connection.CreateCommand();
+        command.Transaction = scope.Transaction;
         command.CommandText =
             """
             INSERT INTO account_transactions
@@ -394,7 +393,7 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
                  $payee, $type, $cashImpact, $pluginVersion, $downloadedAt)
             ON CONFLICT(dedup_hash) DO NOTHING;
             """;
-        command.Parameters.AddWithValue("$accountId", accountId);
+        command.Parameters.AddWithValue("$accountId", scope.AccountId);
         command.Parameters.Add("$dedupHash", SqliteType.Text);
         command.Parameters.Add("$legacyHash", SqliteType.Text);
         command.Parameters.Add("$institution", SqliteType.Text);
@@ -410,19 +409,17 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
         return command;
     }
 
-    private static SqliteCommand CreateDuplicateCommand(SqliteConnection connection, SqliteTransaction transaction)
+    private static SqliteCommand CreateDuplicateCommand(LedgerScope scope)
     {
-        var command = connection.CreateCommand();
-        command.Transaction = transaction;
+        var command = scope.Connection.CreateCommand();
+        command.Transaction = scope.Transaction;
         command.CommandText = "SELECT source_key, cash_impact FROM account_transactions WHERE dedup_hash = $dedupHash;";
         command.Parameters.Add("$dedupHash", SqliteType.Text);
         return command;
     }
 
     private static async Task<bool> InsertTransactionAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long accountId,
+        LedgerScope scope,
         SqliteCommand command,
         PreparedTransaction item,
         CancellationToken cancellationToken)
@@ -449,7 +446,7 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
             // Restricting the filter to SQLITE_CONSTRAINT_UNIQUE keeps unrelated constraint kinds —
             // e.g. a RAISE(ABORT) trigger's extended code — surfacing raw even when same-source data
             // already exists for the account.
-            if (await HasSourceIdentityRowAsync(connection, transaction, accountId, item.SourceKey, cancellationToken)
+            if (await HasSourceIdentityRowAsync(scope, item.SourceKey, cancellationToken)
                     .ConfigureAwait(false))
             {
                 throw new LedgerException(AmbiguousSourceMessage, exception);
@@ -460,24 +457,19 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
         }
     }
 
-    private static async Task<bool> HasSourceIdentityRowAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long accountId,
-        string sourceKey,
-        CancellationToken cancellationToken)
+    private static async Task<bool> HasSourceIdentityRowAsync(LedgerScope scope, string sourceKey, CancellationToken cancellationToken)
     {
         // Under SQLite's default ABORT resolution the failed statement rolled back while this
         // transaction stays usable, so this probe classifies a conflict that already happened; it is
         // not check-then-insert, and the atomic ON CONFLICT(dedup_hash) DO NOTHING result remains the
         // source of truth for dedup.
-        await using var probe = connection.CreateCommand();
-        probe.Transaction = transaction;
+        await using var probe = scope.Connection.CreateCommand();
+        probe.Transaction = scope.Transaction;
         probe.CommandText =
             """
             SELECT 1 FROM account_transactions WHERE account_id = $accountId AND source_key = $sourceKey;
             """;
-        probe.Parameters.AddWithValue("$accountId", accountId);
+        probe.Parameters.AddWithValue("$accountId", scope.AccountId);
         probe.Parameters.AddWithValue("$sourceKey", sourceKey);
         var row = await probe.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return row is not null and not DBNull;
@@ -490,36 +482,53 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
     {
         command.Parameters["$dedupHash"].Value = item.DedupHash;
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false) ||
-            !string.Equals(reader.GetString(0), item.SourceKey, StringComparison.Ordinal) ||
-            ParseCashImpact(reader.GetString(1)) != item.Value.CashImpact)
+        var read = await reader.ReadAsync(cancellationToken).ConfigureAwait(false);
+        if (!read || !MatchesOriginal(reader, item))
         {
             throw new LedgerException(AmbiguousSourceMessage);
         }
     }
+
+    private static bool MatchesOriginal(SqliteDataReader reader, PreparedTransaction item) =>
+        string.Equals(reader.GetString(0), item.SourceKey, StringComparison.Ordinal) &&
+        ParseCashImpact(reader.GetString(1)) == item.Value.CashImpact;
 
     private static CashState CalculateCashState(
         PreparedImport import,
         AccountProgress? previous,
         List<AccountTransaction> inserted)
     {
-        if (previous is not null && inserted.Count == 0 && import.Rejected == 0 && import.OpeningCashBalance is null)
-        {
-            // A duplicate-only import without a new baseline cannot advance or double-apply progress.
-            return previous.CashState;
-        }
-
         var hasUnresolvedNewActivity = inserted.Any(static item => item.CashImpact is
             CashImpact.Unknown or CashImpact.Correction or CashImpact.Unsupported);
-        if (import.OpeningCashBalance is null &&
-            import.Rejected == 0 &&
-            !hasUnresolvedNewActivity &&
-            previous?.CashState is { Status: not CashStateStatus.Known })
+        if (previous is { } progress && IsDuplicateOnlyResync(import, progress, inserted.Count))
         {
-            // New clean activity cannot repair an earlier unknown or reconciliation-needed state by itself.
-            return previous.CashState;
+            // A duplicate-only import without a new baseline cannot advance or double-apply progress.
+            return progress.CashState;
         }
 
+        if (previous is { } unrepairable && CannotRepairUnresolvedState(import, unrepairable, hasUnresolvedNewActivity))
+        {
+            // New clean activity cannot repair an earlier unknown or reconciliation-needed state by itself.
+            return unrepairable.CashState;
+        }
+
+        return ResolveOpening(import, previous, inserted);
+    }
+
+    private static bool IsDuplicateOnlyResync(PreparedImport import, AccountProgress previous, int insertedCount) =>
+        insertedCount == 0 && import.Rejected == 0 && import.OpeningCashBalance is null;
+
+    private static bool CannotRepairUnresolvedState(
+        PreparedImport import,
+        AccountProgress previous,
+        bool hasUnresolvedNewActivity) =>
+        import.OpeningCashBalance is null &&
+        import.Rejected == 0 &&
+        !hasUnresolvedNewActivity &&
+        previous.CashState is { Status: not CashStateStatus.Known };
+
+    private static CashState ResolveOpening(PreparedImport import, AccountProgress? previous, List<AccountTransaction> inserted)
+    {
         var opening = import.OpeningCashBalance;
         if (opening is null && previous?.CashState is { Status: CashStateStatus.Known } known)
         {
@@ -542,18 +551,14 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
     }
 
     private static async Task<long> InsertImportAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long accountId,
+        LedgerScope scope,
         PreparedImport import,
-        int inserted,
-        int skipped,
-        DateOnly? latestSafeDate,
-        CashState cashState,
+        ImportCounts counts,
+        CashCheckpoint checkpoint,
         CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
+        await using var command = scope.Connection.CreateCommand();
+        command.Transaction = scope.Transaction;
         command.CommandText =
             """
             INSERT INTO account_imports
@@ -564,31 +569,28 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
                  $cashStatus, $cashReason, $openingCashBalance, $cashBalance, $cashDifference)
             RETURNING id;
             """;
-        command.Parameters.AddWithValue("$accountId", accountId);
+        command.Parameters.AddWithValue("$accountId", scope.AccountId);
         command.Parameters.AddWithValue("$pluginVersion", import.PluginVersion);
         command.Parameters.AddWithValue("$importedAt", FormatTimestamp(import.ImportedAt));
-        command.Parameters.AddWithValue("$inserted", inserted);
-        command.Parameters.AddWithValue("$skipped", skipped);
+        command.Parameters.AddWithValue("$inserted", counts.Inserted);
+        command.Parameters.AddWithValue("$skipped", counts.Skipped);
         command.Parameters.AddWithValue("$rejected", import.Rejected);
-        AddNullable(command, "$latestSafeDate", latestSafeDate?.ToString(DateFormat, CultureInfo.InvariantCulture));
-        AddCashStateParameters(command, cashState);
+        AddNullable(command, "$latestSafeDate", checkpoint.LatestSafeDate?.ToString(DateFormat, CultureInfo.InvariantCulture));
+        AddCashStateParameters(command, checkpoint.State);
 
         var id = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return Convert.ToInt64(id, CultureInfo.InvariantCulture);
     }
 
     private static async Task UpsertProgressAsync(
-        SqliteConnection connection,
-        SqliteTransaction transaction,
-        long accountId,
+        LedgerScope scope,
         long importId,
         DateTimeOffset importedAt,
-        DateOnly? latestSafeDate,
-        CashState cashState,
+        CashCheckpoint checkpoint,
         CancellationToken cancellationToken)
     {
-        await using var command = connection.CreateCommand();
-        command.Transaction = transaction;
+        await using var command = scope.Connection.CreateCommand();
+        command.Transaction = scope.Transaction;
         command.CommandText =
             """
             INSERT INTO account_progress
@@ -607,11 +609,11 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
                 cash_difference = $cashDifference,
                 updated_at = $updatedAt;
             """;
-        command.Parameters.AddWithValue("$accountId", accountId);
+        command.Parameters.AddWithValue("$accountId", scope.AccountId);
         command.Parameters.AddWithValue("$lastImportId", importId);
         command.Parameters.AddWithValue("$updatedAt", FormatTimestamp(importedAt));
-        AddNullable(command, "$latestSafeDate", latestSafeDate?.ToString(DateFormat, CultureInfo.InvariantCulture));
-        AddCashStateParameters(command, cashState);
+        AddNullable(command, "$latestSafeDate", checkpoint.LatestSafeDate?.ToString(DateFormat, CultureInfo.InvariantCulture));
+        AddCashStateParameters(command, checkpoint.State);
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
 
@@ -650,63 +652,85 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
     private static string FormatTimestamp(DateTimeOffset value) =>
         value.UtcDateTime.ToString("O", CultureInfo.InvariantCulture);
 
-    private static string ToStorage(CashImpact value) => value switch
-    {
-        CashImpact.CashAffecting => "cash",
-        CashImpact.NotCashAffecting => "non-cash",
-        CashImpact.Unknown => "unknown",
-        CashImpact.Correction => "correction",
-        CashImpact.Unsupported => "unsupported",
-        _ => throw new ArgumentOutOfRangeException(nameof(value)),
-    };
+    private static string ToStorage(CashImpact value) => EnumStorage<CashImpact>.ToStorage(value);
 
-    private static CashImpact ParseCashImpact(string value) => value switch
-    {
-        "cash" => CashImpact.CashAffecting,
-        "non-cash" => CashImpact.NotCashAffecting,
-        "unknown" => CashImpact.Unknown,
-        "correction" => CashImpact.Correction,
-        "unsupported" => CashImpact.Unsupported,
-        _ => throw new LedgerException("The ledger contains an unknown cash impact."),
-    };
+    private static CashImpact ParseCashImpact(string value) => EnumStorage<CashImpact>.FromStorage(
+        value,
+        static () => new LedgerException("The ledger contains an unknown cash impact."));
 
-    private static string ToStorage(CashStateStatus value) => value switch
-    {
-        CashStateStatus.Known => "known",
-        CashStateStatus.Unknown => "unknown",
-        CashStateStatus.ReconciliationNeeded => "reconciliation-needed",
-        _ => throw new ArgumentOutOfRangeException(nameof(value)),
-    };
+    private static string ToStorage(CashStateStatus value) => EnumStorage<CashStateStatus>.ToStorage(value);
 
-    private static CashStateStatus ParseCashStatus(string value) => value switch
-    {
-        "known" => CashStateStatus.Known,
-        "unknown" => CashStateStatus.Unknown,
-        "reconciliation-needed" => CashStateStatus.ReconciliationNeeded,
-        _ => throw new LedgerException("The ledger contains an unknown cash-state status."),
-    };
+    private static CashStateStatus ParseCashStatus(string value) => EnumStorage<CashStateStatus>.FromStorage(
+        value,
+        static () => new LedgerException("The ledger contains an unknown cash-state status."));
 
-    private static string ToStorage(CashStateReason value) => value switch
-    {
-        CashStateReason.None => "none",
-        CashStateReason.MissingBaseline => "missing-baseline",
-        CashStateReason.AmbiguousTransaction => "ambiguous-transaction",
-        CashStateReason.Correction => "correction",
-        CashStateReason.UnsupportedActivity => "unsupported-activity",
-        CashStateReason.ArithmeticOverflow => "arithmetic-overflow",
-        _ => throw new ArgumentOutOfRangeException(nameof(value)),
-    };
+    private static string ToStorage(CashStateReason value) => EnumStorage<CashStateReason>.ToStorage(value);
 
-    private static CashStateReason ParseCashReason(string value) => value switch
+    private static CashStateReason ParseCashReason(string value) => EnumStorage<CashStateReason>.FromStorage(
+        value,
+        static () => new LedgerException("The ledger contains an unknown cash-state reason."));
+
+    /// <summary>Maps an enum to its storage string and back, throwing the caller's exception on unknown text.</summary>
+    internal static class EnumStorage<TEnum>
+        where TEnum : struct, Enum
     {
-        "none" => CashStateReason.None,
-        "missing-baseline" => CashStateReason.MissingBaseline,
-        "ambiguous-transaction" => CashStateReason.AmbiguousTransaction,
-        "correction" => CashStateReason.Correction,
-        "unsupported-activity" => CashStateReason.UnsupportedActivity,
-        "arithmetic-overflow" => CashStateReason.ArithmeticOverflow,
-        _ => throw new LedgerException("The ledger contains an unknown cash-state reason."),
-    };
+        private static readonly FrozenDictionary<TEnum, string> ToStorageMap = BuildMap();
+
+        private static FrozenDictionary<TEnum, string> BuildMap() =>
+            typeof(TEnum) == typeof(CashImpact) ? (FrozenDictionary<TEnum, string>)(object)CashImpactMap()
+            : typeof(TEnum) == typeof(CashStateStatus) ? (FrozenDictionary<TEnum, string>)(object)CashStateStatusMap
+            : typeof(TEnum) == typeof(CashStateReason) ? (FrozenDictionary<TEnum, string>)(object)CashStateReasonMap
+            : throw new InvalidOperationException($"No storage map for {typeof(TEnum).Name}.");
+
+        private static FrozenDictionary<CashImpact, string> CashImpactMap() =>
+            new Dictionary<CashImpact, string>
+            {
+                [CashImpact.CashAffecting] = "cash",
+                [CashImpact.NotCashAffecting] = "non-cash",
+                [CashImpact.Unknown] = "unknown",
+                [CashImpact.Correction] = "correction",
+                [CashImpact.Unsupported] = "unsupported",
+            }.ToFrozenDictionary();
+
+        private static FrozenDictionary<CashStateStatus, string> CashStateStatusMap =>
+            new Dictionary<CashStateStatus, string>
+            {
+                [CashStateStatus.Known] = "known",
+                [CashStateStatus.Unknown] = "unknown",
+                [CashStateStatus.ReconciliationNeeded] = "reconciliation-needed",
+            }.ToFrozenDictionary();
+
+        private static FrozenDictionary<CashStateReason, string> CashStateReasonMap =>
+            new Dictionary<CashStateReason, string>
+            {
+                [CashStateReason.None] = "none",
+                [CashStateReason.MissingBaseline] = "missing-baseline",
+                [CashStateReason.AmbiguousTransaction] = "ambiguous-transaction",
+                [CashStateReason.Correction] = "correction",
+                [CashStateReason.UnsupportedActivity] = "unsupported-activity",
+                [CashStateReason.ArithmeticOverflow] = "arithmetic-overflow",
+            }.ToFrozenDictionary();
+
+        /// <summary>Throws <see cref="ArgumentOutOfRangeException"/> for unmapped enum values.</summary>
+        public static string ToStorage(TEnum value) =>
+            ToStorageMap.TryGetValue(value, out var storage)
+                ? storage
+                : throw new ArgumentOutOfRangeException(nameof(value));
+
+        /// <summary>Parses a storage string, throwing the caller-supplied exception for unknown text.</summary>
+        public static TEnum FromStorage(string value, Func<Exception> unknownValue)
+        {
+            foreach (var (enumValue, storage) in ToStorageMap)
+            {
+                if (string.Equals(storage, value, StringComparison.Ordinal))
+                {
+                    return enumValue;
+                }
+            }
+
+            throw unknownValue();
+        }
+    }
 
     private sealed record PreparedImport(
         Account Account,
@@ -723,4 +747,10 @@ public sealed class SqliteAccountLedgerStore(LedgerDatabase database) : IAccount
         string SourceKey);
 
     private sealed record AccountProgress(DateOnly? LatestSafeDate, CashState CashState);
+
+    private sealed record ImportCounts(int Inserted, int Skipped);
+
+    private sealed record CashCheckpoint(DateOnly? LatestSafeDate, CashState State);
+
+    private sealed record LedgerScope(SqliteConnection Connection, SqliteTransaction Transaction, long AccountId);
 }
