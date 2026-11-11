@@ -27,79 +27,106 @@ public static partial class PluginFileParser
     /// <exception cref="PluginFileException">The JSON is malformed or fails validation.</exception>
     public static PluginManifest ParseManifest(string json, string sourcePath)
     {
+        var source = CreateSource(json, sourcePath);
+        var dto = ParseManifestDto(source);
+
+        ValidateName(dto.Name, source);
+        ValidateVersion(dto.Version, source);
+        var capabilities = ParseCapabilities(dto.Capabilities, source);
+        var skills = ParseStringList(dto.Skills, "skills", source);
+        var tools = ParseStringList(dto.Tools, "tools", source);
+        ValidateAssemblyAndTypeDeclaredTogether(dto, source);
+
+        return new PluginManifest
+        {
+            Name = dto.Name!,
+            Version = dto.Version!,
+            Capabilities = capabilities,
+            Skills = skills,
+            Tools = tools,
+            Assembly = dto.Assembly is null ? null : ParseAssemblyPath(dto.Assembly, source),
+            Type = dto.Type is null ? null : ParseTypeName(dto.Type, source),
+        };
+    }
+
+    private static PluginFileSource CreateSource(string json, string sourcePath)
+    {
         ArgumentNullException.ThrowIfNull(json);
         ArgumentNullException.ThrowIfNull(sourcePath);
+        return new PluginFileSource(json, sourcePath);
+    }
 
-        ManifestDto dto;
+    private static ManifestDto ParseManifestDto(PluginFileSource source)
+    {
         try
         {
-            dto = JsonSerializer.Deserialize<ManifestDto>(json, Options)
-                ?? throw Fail(sourcePath, "the manifest is empty.");
+            return JsonSerializer.Deserialize<ManifestDto>(source.Json, Options)
+                ?? throw Reject(source, "the manifest is empty.");
         }
         catch (JsonException ex)
         {
-            throw Fail(sourcePath, ex.Message, ex);
+            throw Reject(source, ex.Message, ex);
         }
+    }
 
-        if (string.IsNullOrWhiteSpace(dto.Name))
+    private static void ValidateName(string? name, PluginFileSource source)
+    {
+        if (string.IsNullOrWhiteSpace(name))
         {
-            throw Fail(sourcePath, "'name' is required.");
+            throw Reject(source, "'name' is required.");
         }
 
-        if (!NamePattern().IsMatch(dto.Name))
+        if (!NamePattern().IsMatch(name))
         {
-            throw Fail(sourcePath, $"'name' must match {NamePatternText} (got '{dto.Name}').");
+            throw Reject(source, $"'name' must match {NamePatternText} (got '{name}').");
         }
+    }
 
-        if (string.IsNullOrWhiteSpace(dto.Version))
+    private static void ValidateVersion(string? version, PluginFileSource source)
+    {
+        if (string.IsNullOrWhiteSpace(version))
         {
-            throw Fail(sourcePath, "'version' is required.");
+            throw Reject(source, "'version' is required.");
         }
 
-        if (!VersionPattern().IsMatch(dto.Version))
+        if (!VersionPattern().IsMatch(version))
         {
-            throw Fail(sourcePath, $"'version' must be a SemVer string (got '{dto.Version}').");
+            throw Reject(source, $"'version' must be a SemVer string (got '{version}').");
         }
+    }
 
-        var capabilities = new List<PluginCapability>(dto.Capabilities?.Count ?? 0);
-        foreach (var entry in dto.Capabilities ?? [])
+    private static List<PluginCapability> ParseCapabilities(List<string?>? entries, PluginFileSource source)
+    {
+        var capabilities = new List<PluginCapability>(entries?.Count ?? 0);
+        foreach (var entry in entries ?? [])
         {
             if (string.IsNullOrWhiteSpace(entry))
             {
-                throw Fail(sourcePath, "'capabilities' entries must be non-empty strings.");
+                throw Reject(source, "'capabilities' entries must be non-empty strings.");
             }
 
             if (!PluginCapabilityNames.TryParse(entry, out var capability))
             {
-                throw Fail(sourcePath, $"unknown capability '{entry}'.");
+                throw Reject(source, $"unknown capability '{entry}'.");
             }
 
             if (capabilities.Contains(capability))
             {
-                throw Fail(sourcePath, $"duplicate capability '{entry}'.");
+                throw Reject(source, $"duplicate capability '{entry}'.");
             }
 
             capabilities.Add(capability);
         }
 
-        var skills = ParseStringList(dto.Skills, "skills", sourcePath);
-        var tools = ParseStringList(dto.Tools, "tools", sourcePath);
+        return capabilities;
+    }
 
+    private static void ValidateAssemblyAndTypeDeclaredTogether(ManifestDto dto, PluginFileSource source)
+    {
         if ((dto.Assembly is null) != (dto.Type is null))
         {
-            throw Fail(sourcePath, "'assembly' and 'type' must be declared together.");
+            throw Reject(source, "'assembly' and 'type' must be declared together.");
         }
-
-        return new PluginManifest
-        {
-            Name = dto.Name,
-            Version = dto.Version,
-            Capabilities = capabilities,
-            Skills = skills,
-            Tools = tools,
-            Assembly = dto.Assembly is null ? null : ParseAssemblyPath(dto.Assembly, sourcePath),
-            Type = dto.Type is null ? null : ParseTypeName(dto.Type, sourcePath),
-        };
     }
 
     /// <summary>Parses and validates a <c>config.json</c> file.</summary>
@@ -109,24 +136,22 @@ public static partial class PluginFileParser
     /// <exception cref="PluginFileException">The JSON is malformed or fails validation.</exception>
     public static PluginConfiguration ParseConfiguration(string json, string sourcePath)
     {
-        ArgumentNullException.ThrowIfNull(json);
-        ArgumentNullException.ThrowIfNull(sourcePath);
-
+        var source = CreateSource(json, sourcePath);
         ConfigurationDto dto;
         try
         {
             dto = JsonSerializer.Deserialize<ConfigurationDto>(json, Options)
-                ?? throw Fail(sourcePath, "the configuration is empty.");
+                ?? throw Reject(source, "the configuration is empty.");
         }
         catch (JsonException ex)
         {
-            throw Fail(sourcePath, ex.Message, ex);
+            throw Reject(source, ex.Message, ex);
         }
 
         return new PluginConfiguration
         {
-            BitwardenMcpUrl = ParseUrl(dto.BitwardenMcpUrl, "bitwardenMcpUrl", sourcePath),
-            PlaywrightMcpUrl = ParseUrl(dto.PlaywrightMcpUrl, "playwrightMcpUrl", sourcePath),
+            BitwardenMcpUrl = ParseUrl(dto.BitwardenMcpUrl, "bitwardenMcpUrl", source),
+            PlaywrightMcpUrl = ParseUrl(dto.PlaywrightMcpUrl, "playwrightMcpUrl", source),
             Headless = dto.Headless ?? true,
             CredentialKeys = new PluginCredentialKeys
             {
@@ -136,20 +161,20 @@ public static partial class PluginFileParser
         };
     }
 
-    private static List<string> ParseStringList(List<string?>? values, string propertyName, string sourcePath)
+    private static List<string> ParseStringList(List<string?>? values, string propertyName, PluginFileSource source)
     {
         var result = new List<string>(values?.Count ?? 0);
         foreach (var value in values ?? [])
         {
             if (string.IsNullOrWhiteSpace(value))
             {
-                throw Fail(sourcePath, $"'{propertyName}' entries must be non-empty strings.");
+                throw Reject(source, $"'{propertyName}' entries must be non-empty strings.");
             }
 
             var trimmed = value.Trim();
             if (result.Contains(trimmed, StringComparer.Ordinal))
             {
-                throw Fail(sourcePath, $"duplicate '{propertyName}' entry '{trimmed}'.");
+                throw Reject(source, $"duplicate '{propertyName}' entry '{trimmed}'.");
             }
 
             result.Add(trimmed);
@@ -158,57 +183,66 @@ public static partial class PluginFileParser
         return result;
     }
 
-    private static string ParseAssemblyPath(string value, string sourcePath)
+    private static string ParseAssemblyPath(string value, PluginFileSource source)
     {
         var trimmed = value.Trim();
-        var segments = trimmed.Split('/', '\\');
-
-        var valid = trimmed.Length > 0
-            && !Path.IsPathRooted(trimmed)
-            && !trimmed.StartsWith('/')
-            && !trimmed.StartsWith('\\')
-            && !segments.Contains("..")
-            && trimmed.EndsWith(".dll", StringComparison.OrdinalIgnoreCase)
-            && !trimmed.Contains(':', StringComparison.Ordinal)
-            && !trimmed.Contains('\0', StringComparison.Ordinal);
-
-        if (!valid)
+        if (!IsRelativeDllPath(trimmed))
         {
-            throw Fail(sourcePath, $"'assembly' must be a relative path to a .dll inside the plugin folder (got '{trimmed}').");
+            throw Reject(source, $"'assembly' must be a relative path to a .dll inside the plugin folder (got '{trimmed}').");
         }
 
         return trimmed.Replace('\\', '/');
     }
 
-    private static string ParseTypeName(string value, string sourcePath)
+    private static bool IsRelativeDllPath(string value) =>
+        HasNonEmptyValue(value)
+        && IsRelative(value)
+        && HasDllExtension(value)
+        && HasNoTraversal(value)
+        && HasNoInvalidCharacters(value);
+
+    private static bool HasNonEmptyValue(string value) => value.Length > 0;
+
+    private static bool IsRelative(string value) =>
+        !Path.IsPathRooted(value) && !value.StartsWith('/') && !value.StartsWith('\\');
+
+    private static bool HasDllExtension(string value) => value.EndsWith(".dll", StringComparison.OrdinalIgnoreCase);
+
+    private static bool HasNoTraversal(string value) => !value.Split('/', '\\').Contains("..");
+
+    private static bool HasNoInvalidCharacters(string value) =>
+        !value.Contains(':', StringComparison.Ordinal) && !value.Contains('\0', StringComparison.Ordinal);
+    private static string ParseTypeName(string value, PluginFileSource source)
     {
         var trimmed = value.Trim();
         if (!TypeNamePattern().IsMatch(trimmed))
         {
-            throw Fail(sourcePath, $"'type' must be a full type name such as 'Company.Plugin.MyPlugin' (got '{trimmed}').");
+            throw Reject(source, $"'type' must be a full type name such as 'Company.Plugin.MyPlugin' (got '{trimmed}').");
         }
 
         return trimmed;
     }
 
-    private static string? ParseUrl(string? value, string propertyName, string sourcePath)
+    private static string? ParseUrl(string? value, string propertyName, PluginFileSource source)
     {
         if (value is null)
         {
             return null;
         }
 
-        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) ||
-            (uri.Scheme != Uri.UriSchemeHttp && uri.Scheme != Uri.UriSchemeHttps))
+        if (!Uri.TryCreate(value, UriKind.Absolute, out var uri) || !IsAbsoluteHttpUrl(uri))
         {
-            throw Fail(sourcePath, $"'{propertyName}' must be an absolute http or https URL (got '{value}').");
+            throw Reject(source, $"'{propertyName}' must be an absolute http or https URL (got '{value}').");
         }
 
         return value;
     }
 
-    private static PluginFileException Fail(string sourcePath, string reason, Exception? innerException = null) =>
-        new($"Invalid plugin file '{sourcePath}': {reason}", sourcePath, innerException);
+    internal static bool IsAbsoluteHttpUrl(Uri uri) =>
+        uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps;
+
+    private static PluginFileException Reject(PluginFileSource source, string reason, Exception? innerException = null) =>
+        new($"Invalid plugin file '{source.SourcePath}': {reason}", source.SourcePath, innerException);
 
     [GeneratedRegex(NamePatternText)]
     private static partial Regex NamePattern();
@@ -253,4 +287,7 @@ public static partial class PluginFileParser
 
         public string? Password { get; set; }
     }
+
+    /// <summary>Carries the JSON text and its path so error messages need no extra string parameter.</summary>
+    private sealed record PluginFileSource(string Json, string SourcePath);
 }
