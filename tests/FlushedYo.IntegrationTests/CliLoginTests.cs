@@ -5,7 +5,17 @@ namespace FlushedYo.IntegrationTests;
 /// <summary>End-to-end <c>login</c> tests against the built CLI with stub plugins.</summary>
 public sealed class CliLoginTests
 {
-    private const string CredentialKeysJson = """{"username":"stub/username","password":"stub/password"}""";
+    private const string CredentialKey = "stub";
+
+    private static async Task<CliResult> RunStubLoginAsync(bool includePassword, params string[] args)
+    {
+        using var workspace = new CliWorkspace();
+        workspace.AddStubPlugin("stub", credentialKey: CredentialKey);
+        var env = includePassword
+            ? CliWorkspace.EnvironmentSecretStore(("STUB_USERNAME", "S3CR3T-USER"), ("STUB_PASSWORD", "S3CR3T-PASS"))
+            : CliWorkspace.EnvironmentSecretStore(("STUB_USERNAME", "S3CR3T-USER"));
+        return await workspace.RunAsync(args, env);
+    }
 
     private static async Task<PluginStatusRow[]> ParseJsonAsync(string stdout)
     {
@@ -24,19 +34,12 @@ public sealed class CliLoginTests
     [Fact]
     public async Task AllCredentialsPresent_ExitsZero_NoSecretInOutput()
     {
-        using var workspace = new CliWorkspace();
-        workspace.AddStubPlugin("stub", credentialKeysJson: CredentialKeysJson);
-
-        var env = workspace.Env(CliWorkspace.EnvironmentSecretStore(
-            ("STUB_USERNAME", "S3CR3T-USER"),
-            ("STUB_PASSWORD", "S3CR3T-PASS")));
-
-        var result = await workspace.RunAsync(["login"], env);
+        var result = await RunStubLoginAsync(includePassword: true, "login");
 
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("ok", result.StdOut);
-        Assert.Contains("stub/username", result.StdOut);
-        Assert.Contains("stub/password", result.StdOut);
+        Assert.Contains("credential", result.StdOut);
+        Assert.Contains("stub", result.StdOut);
         Assert.DoesNotContain("S3CR3T-USER", result.StdOut + result.StdErr);
         Assert.Empty(result.StdErr);
     }
@@ -44,12 +47,7 @@ public sealed class CliLoginTests
     [Fact]
     public async Task MissingCredential_ExitsOne_StderrHints()
     {
-        using var workspace = new CliWorkspace();
-        workspace.AddStubPlugin("stub", credentialKeysJson: CredentialKeysJson);
-
-        var env = workspace.Env(CliWorkspace.EnvironmentSecretStore(("STUB_USERNAME", "S3CR3T-USER")));
-
-        var result = await workspace.RunAsync(["login"], env);
+        var result = await RunStubLoginAsync(includePassword: false, "login");
 
         Assert.Equal(1, result.ExitCode);
         Assert.Contains("missing", result.StdOut);
@@ -60,32 +58,20 @@ public sealed class CliLoginTests
     [Fact]
     public async Task Json_AllPresent_OkTrue()
     {
-        using var workspace = new CliWorkspace();
-        workspace.AddStubPlugin("stub", credentialKeysJson: CredentialKeysJson);
-
-        var env = workspace.Env(CliWorkspace.EnvironmentSecretStore(
-            ("STUB_USERNAME", "S3CR3T-USER"),
-            ("STUB_PASSWORD", "S3CR3T-PASS")));
-
-        var result = await workspace.RunAsync(["login", "--json"], env);
+        var result = await RunStubLoginAsync(includePassword: true, "login", "--json");
 
         Assert.Equal(0, result.ExitCode);
         var rows = await ParseJsonAsync(result.StdOut);
         Assert.Single(rows);
         Assert.True(rows[0].Ok);
-        Assert.All(rows[0].Credentials, status => Assert.Equal("ok", status));
+        Assert.Equal("ok", Assert.Single(rows[0].Credentials));
         Assert.Empty(result.StdErr);
     }
 
     [Fact]
     public async Task Json_MissingCredential_OkFalse_ExitOne()
     {
-        using var workspace = new CliWorkspace();
-        workspace.AddStubPlugin("stub", credentialKeysJson: CredentialKeysJson);
-
-        var env = workspace.Env(CliWorkspace.EnvironmentSecretStore(("STUB_USERNAME", "S3CR3T-USER")));
-
-        var result = await workspace.RunAsync(["login", "--json"], env);
+        var result = await RunStubLoginAsync(includePassword: false, "login", "--json");
 
         Assert.Equal(1, result.ExitCode);
         Assert.Empty(result.StdErr);
@@ -93,15 +79,14 @@ public sealed class CliLoginTests
         Assert.False(doc.RootElement.GetProperty("ok").GetBoolean());
         var statuses = doc.RootElement.GetProperty("plugins")[0].GetProperty("credentials")
             .EnumerateArray().Select(c => c.GetProperty("status").GetString()).ToArray();
-        Assert.Contains("ok", statuses);
-        Assert.Contains("missing", statuses);
+        Assert.Equal("missing", Assert.Single(statuses));
     }
 
     [Fact]
     public async Task NotConfigured_ExitsZero_AllRowsNotConfigured()
     {
         using var workspace = new CliWorkspace();
-        workspace.AddStubPlugin("stub"); // no credential keys
+        workspace.AddStubPlugin("stub"); // no credential key
 
         var env = workspace.Env();
 
@@ -109,7 +94,7 @@ public sealed class CliLoginTests
 
         Assert.Equal(0, result.ExitCode);
         Assert.Contains("not-configured", result.StdOut);
-        Assert.Contains("not-configured", result.StdOut); // twice
+        Assert.Equal(2, result.StdOut.Split("not-configured", StringSplitOptions.None).Length);
     }
 
     [Fact]
@@ -117,7 +102,7 @@ public sealed class CliLoginTests
     {
         using var workspace = new CliWorkspace();
         var folder = workspace.AddDescriptorOnlyPlugin("stub");
-        File.WriteAllText(Path.Combine(folder, "config.json"), $$"""{ "credentialKeys": {{CredentialKeysJson}} }""");
+        File.WriteAllText(Path.Combine(folder, "config.json"), $$"""{ "credentialKey": "{{CredentialKey}}" }""");
 
         var env = workspace.Env(CliWorkspace.EnvironmentSecretStore(
             ("STUB_USERNAME", "S3CR3T-USER"),
@@ -134,7 +119,7 @@ public sealed class CliLoginTests
     public async Task LockedVault_ExitsTwo()
     {
         using var workspace = new CliWorkspace();
-        workspace.AddStubPlugin("stub", credentialKeysJson: CredentialKeysJson);
+        workspace.AddStubPlugin("stub", credentialKey: CredentialKey);
 
         var result = await workspace.RunAsync(["login"], CliRunner.FakeEnv("locked"));
 
@@ -157,7 +142,7 @@ public sealed class CliLoginTests
     public async Task Login_NeverCreatesTheLedger()
     {
         using var workspace = new CliWorkspace();
-        workspace.AddStubPlugin("stub", credentialKeysJson: CredentialKeysJson);
+        workspace.AddStubPlugin("stub", credentialKey: CredentialKey);
 
         var env = workspace.Env(CliWorkspace.EnvironmentSecretStore(
             ("STUB_USERNAME", "S3CR3T-USER"),

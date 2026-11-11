@@ -4,20 +4,18 @@ using FlushedYo.Core.SecretStore;
 namespace FlushedYo.Core.Commands;
 
 /// <summary>
-/// Checks that each plugin's configured credential keys exist in the secret store. It asks only whether a
-/// key exists and never keeps, logs, or returns a secret value.
+/// Checks that each plugin's configured credential key resolves to a login credential. The retrieved
+/// credential is discarded immediately and never logged or included in the report.
 /// </summary>
 /// <remarks>
-/// Both real secret stores implement <see cref="ISecretStore.SecretExistsAsync"/> by fetching the value and
-/// testing it for null, so the value passes through memory inside the store; this service never sees it.
-/// Store failures (for example a locked vault) are not caught: they propagate to the top-level handler.
+/// Store failures (for example a locked vault or duplicate key) are not caught: they propagate to the
+/// top-level handler.
 /// </remarks>
 public sealed class LoginService(ISecretStore secretStore)
 {
-    private const string UsernameCredential = "username";
-    private const string PasswordCredential = "password";
+    private const string CredentialName = "credential";
 
-    /// <summary>Checks the username and password keys of each plugin.</summary>
+    /// <summary>Checks the credential key of each plugin.</summary>
     /// <param name="plugins">The plugins to check, in the order to report them.</param>
     /// <param name="cancellationToken">Token that cancels the check between plugins.</param>
     /// <returns>One result per plugin.</returns>
@@ -30,26 +28,22 @@ public sealed class LoginService(ISecretStore secretStore)
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var keys = plugin.Configuration.CredentialKeys;
-            results.Add(new PluginLoginResult(
-                plugin.Name,
-                [
-                    await CheckAsync(UsernameCredential, keys.Username, cancellationToken).ConfigureAwait(false),
-                    await CheckAsync(PasswordCredential, keys.Password, cancellationToken).ConfigureAwait(false),
-                ]));
+            var check = await CheckAsync(plugin.Configuration.CredentialKey, cancellationToken).ConfigureAwait(false);
+            results.Add(new PluginLoginResult(plugin.Name, [check]));
         }
 
         return new LoginReport(results);
     }
 
-    private async Task<CredentialCheck> CheckAsync(string credential, string? key, CancellationToken cancellationToken)
+    private async Task<CredentialCheck> CheckAsync(string? key, CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(key))
         {
-            return new CredentialCheck(credential, null, CredentialStatus.NotConfigured);
+            return new CredentialCheck(CredentialName, null, CredentialStatus.NotConfigured);
         }
 
-        var exists = await secretStore.SecretExistsAsync(key, cancellationToken).ConfigureAwait(false);
-        return new CredentialCheck(credential, key, exists ? CredentialStatus.Ok : CredentialStatus.Missing);
+        var credential = await secretStore.GetCredentialAsync(key, cancellationToken).ConfigureAwait(false);
+        var status = credential is null ? CredentialStatus.Missing : CredentialStatus.Ok;
+        return new CredentialCheck(CredentialName, key, status);
     }
 }

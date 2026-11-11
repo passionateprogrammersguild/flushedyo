@@ -3,8 +3,8 @@ using FlushedYo.Core.SecretStore;
 namespace FlushedYo.Core.Tests.Commands;
 
 /// <summary>
-/// An <see cref="ISecretStore"/> for tests. <see cref="GetSecretAsync"/> throws on purpose: code that must
-/// only check existence (such as <c>login</c>) fails loudly if it ever asks for a value.
+/// An <see cref="ISecretStore"/> for command tests. <see cref="GetSecretAsync"/> throws on purpose so
+/// <c>login</c> fails loudly if it uses the legacy single-value lookup.
 /// </summary>
 internal sealed class FakeSecretStore(
     IReadOnlyDictionary<string, string>? secrets = null,
@@ -17,6 +17,17 @@ internal sealed class FakeSecretStore(
 
     public Task<string?> GetSecretAsync(string key, CancellationToken cancellationToken = default) =>
         throw new InvalidOperationException("GetSecretAsync must not be called");
+
+    public Task<Credential?> GetCredentialAsync(string key, CancellationToken cancellationToken = default)
+    {
+        _checkedKeys.Add(key);
+        if (existsFailure is not null)
+        {
+            throw existsFailure;
+        }
+
+        return Task.FromResult<Credential?>(_secrets.TryGetValue(key, out var value) ? new Credential(value, value) : null);
+    }
 
     public Task<bool> SecretExistsAsync(string key, CancellationToken cancellationToken = default)
     {

@@ -16,10 +16,7 @@ public sealed class PluginConfigurationParserTests
               "bitwardenMcpUrl": "http://localhost:3000",
               "playwrightMcpUrl": "http://localhost:3001",
               "headless": false,
-              "credentialKeys": {
-                "username": "fidelity/username",
-                "password": "fidelity/password"
-              }
+              "credentialKey": "fidelity/mmann"
             }
             """,
             SourcePath);
@@ -27,8 +24,7 @@ public sealed class PluginConfigurationParserTests
         Assert.Equal("http://localhost:3000", configuration.BitwardenMcpUrl);
         Assert.Equal("http://localhost:3001", configuration.PlaywrightMcpUrl);
         Assert.False(configuration.Headless);
-        Assert.Equal("fidelity/username", configuration.CredentialKeys.Username);
-        Assert.Equal("fidelity/password", configuration.CredentialKeys.Password);
+        Assert.Equal("fidelity/mmann", configuration.CredentialKey);
     }
 
     [Fact]
@@ -39,8 +35,7 @@ public sealed class PluginConfigurationParserTests
         Assert.Null(configuration.BitwardenMcpUrl);
         Assert.Null(configuration.PlaywrightMcpUrl);
         Assert.True(configuration.Headless);
-        Assert.Null(configuration.CredentialKeys.Username);
-        Assert.Null(configuration.CredentialKeys.Password);
+        Assert.Null(configuration.CredentialKey);
     }
 
     [Fact]

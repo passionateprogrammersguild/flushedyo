@@ -14,6 +14,16 @@ public sealed class EnvironmentVariableSecretStore : ISecretStore
         return Task.FromResult(Environment.GetEnvironmentVariable(ToVariableName(key)));
     }
 
+    public Task<Credential?> GetCredentialAsync(string key, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        var variableName = ToVariableName(key);
+        var username = Environment.GetEnvironmentVariable(variableName + "_USERNAME");
+        var password = Environment.GetEnvironmentVariable(variableName + "_PASSWORD");
+        Credential? credential = username is null || password is null ? null : new Credential(username, password);
+        return Task.FromResult(credential);
+    }
+
     public async Task<bool> SecretExistsAsync(string key, CancellationToken cancellationToken = default)
         => await GetSecretAsync(key, cancellationToken) is not null;
 

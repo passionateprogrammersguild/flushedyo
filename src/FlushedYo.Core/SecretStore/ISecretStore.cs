@@ -9,6 +9,10 @@ public interface ISecretStore
     /// <summary>Resolves the secret value for <paramref name="key"/>, or null when not found.</summary>
     Task<string?> GetSecretAsync(string key, CancellationToken cancellationToken = default);
 
+    /// <summary>Resolves the login credential for one item, or null when not found.</summary>
+    /// <exception cref="DuplicateSecretKeyException">More than one item has the requested key.</exception>
+    Task<Credential?> GetCredentialAsync(string key, CancellationToken cancellationToken = default);
+
     /// <summary>Returns true when a secret exists for <paramref name="key"/>.</summary>
     Task<bool> SecretExistsAsync(string key, CancellationToken cancellationToken = default);
 }

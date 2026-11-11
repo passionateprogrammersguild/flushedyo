@@ -47,14 +47,14 @@ public sealed class PluginLoaderTests
         temp.AddPlugin(
             "fidelity",
             TempPluginDirectory.Manifest("fidelity"),
-            """{ "headless": false, "credentialKeys": { "username": "fidelity/username" } }""");
+            """{ "headless": false, "credentialKey": "fidelity/mmann" }""");
 
         var plugins = await CreateLoader(temp.Root, new CapturingLogger<PluginLoader>())
             .LoadAsync(TestContext.Current.CancellationToken);
 
         var plugin = Assert.Single(plugins);
         Assert.False(plugin.Configuration.Headless);
-        Assert.Equal("fidelity/username", plugin.Configuration.CredentialKeys.Username);
+        Assert.Equal("fidelity/mmann", plugin.Configuration.CredentialKey);
     }
 
     [Fact]

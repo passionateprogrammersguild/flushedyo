@@ -69,7 +69,7 @@ public sealed class CliLedgerLazinessTests
     public async Task Login_DoesNotCreateTheLedger()
     {
         using var workspace = new CliWorkspace();
-        workspace.AddStubPlugin("stub", credentialKeysJson: """{"username":"stub/username","password":"stub/password"}""");
+        workspace.AddStubPlugin("stub", credentialKey: "stub");
 
         await workspace.RunAsync(["login", "--json"], CliWorkspace.EnvironmentSecretStore(
             ("STUB_USERNAME", "S3CR3T-USER"),

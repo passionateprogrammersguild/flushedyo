@@ -20,10 +20,16 @@ namespace FlushedYo.Core.SecretStore;
 ///
 /// Secrets are resolved by invoking the configured tool with the secret key plus any static
 /// <see cref="BitwardenMcpOptions.ToolArguments"/>. The defaults target the official server's
-/// <c>get</c> tool, equivalent to <c>bw get password &lt;id&gt;</c>.
+/// <c>get</c> tool, equivalent to <c>bw get password &lt;id&gt;</c>. Credential lookup uses
+/// <c>object=item</c> and throws <see cref="DuplicateSecretKeyException"/> for duplicate items.
 /// </summary>
 public sealed partial class BitwardenMcpSecretStore : ISecretStore
 {
+    private const string ObjectArgumentName = "object";
+    private const string ItemObjectName = "item";
+
+    private sealed record GetToolRequest(string Key, string? ObjectName = null);
+
     private readonly BitwardenMcpOptions _options;
     private readonly Func<CancellationToken, Task<McpClient>> _clientFactory;
     private readonly ILogger _logger;
@@ -48,13 +54,22 @@ public sealed partial class BitwardenMcpSecretStore : ISecretStore
         BitwardenMcpOptionsValidator.Validate(_options);
     }
 
-    public async Task<string?> GetSecretAsync(string key, CancellationToken cancellationToken = default)
+    public Task<string?> GetSecretAsync(string key, CancellationToken cancellationToken = default)
+        => ExecuteWithClientAsync(new GetToolRequest(key), InvokeGetSecretAsync, cancellationToken);
+
+    public Task<Credential?> GetCredentialAsync(string key, CancellationToken cancellationToken = default)
+        => ExecuteWithClientAsync(new GetToolRequest(key, ItemObjectName), InvokeGetCredentialAsync, cancellationToken);
+
+    private async Task<T> ExecuteWithClientAsync<T>(
+        GetToolRequest request,
+        Func<McpClient, GetToolRequest, CancellationToken, Task<T>> action,
+        CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(key);
+        ArgumentException.ThrowIfNullOrWhiteSpace(request.Key);
 
         if (_logger.IsEnabled(LogLevel.Debug))
         {
-            _logResolvingSecret(_logger, key, _options.GetSecretTool, null);
+            _logResolvingSecret(_logger, request.Key, _options.GetSecretTool, null);
         }
 
         using var connectCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -71,7 +86,7 @@ public sealed partial class BitwardenMcpSecretStore : ISecretStore
 
                 await PerformPreflightCheckAsync(client, cancellationToken);
 
-                return await InvokeGetSecretAsync(client, key, cancellationToken);
+                return await action(client, request, cancellationToken);
             }
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -104,24 +119,50 @@ public sealed partial class BitwardenMcpSecretStore : ISecretStore
         }
     }
 
-    private async Task<string?> InvokeGetSecretAsync(McpClient client, string key, CancellationToken cancellationToken)
+    private async Task<string?> InvokeGetSecretAsync(McpClient client, GetToolRequest request, CancellationToken cancellationToken)
+    {
+        var result = await InvokeGetToolAsync(client, request, cancellationToken);
+        if (result.IsError is true)
+        {
+            return InterpretErrorResult(request, result);
+        }
+
+        var text = ReadResultText(result);
+        return string.IsNullOrWhiteSpace(text) ? null : text;
+    }
+
+    private async Task<Credential?> InvokeGetCredentialAsync(McpClient client, GetToolRequest request, CancellationToken cancellationToken)
+    {
+        var result = await InvokeGetToolAsync(client, request, cancellationToken);
+        var text = ReadResultText(result);
+        ThrowIfDuplicateKey(request, text);
+
+        if (result.IsError is true)
+        {
+            if (IsNotFound(text))
+            {
+                return null;
+            }
+
+            throw CreateToolErrorException(request, text);
+        }
+
+        return string.IsNullOrWhiteSpace(text) ? null : ParseCredential(request, text);
+    }
+
+    private async Task<CallToolResult> InvokeGetToolAsync(
+        McpClient client,
+        GetToolRequest request,
+        CancellationToken cancellationToken)
     {
         using var callCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         callCts.CancelAfter(TimeSpan.FromSeconds(_options.CallTimeoutSeconds));
 
-        var arguments = BuildToolArguments(key);
-        var result = await client.CallToolAsync(_options.GetSecretTool, arguments, cancellationToken: callCts.Token);
-
-        if (result.IsError is true)
-        {
-            return InterpretErrorResult(key, result);
-        }
-
-        var text = string.Join(Environment.NewLine, result.Content.OfType<TextContentBlock>().Select(block => block.Text));
-        return string.IsNullOrWhiteSpace(text) ? null : text;
+        var arguments = BuildToolArguments(request);
+        return await client.CallToolAsync(_options.GetSecretTool, arguments, cancellationToken: callCts.Token);
     }
 
-    private Dictionary<string, object?> BuildToolArguments(string key)
+    private Dictionary<string, object?> BuildToolArguments(GetToolRequest request)
     {
         var arguments = new Dictionary<string, object?>(StringComparer.Ordinal);
         foreach (var (name, value) in _options.ToolArguments)
@@ -129,11 +170,79 @@ public sealed partial class BitwardenMcpSecretStore : ISecretStore
             arguments[name] = value;
         }
 
-        arguments[_options.SecretKeyArgument] = key;
+        if (request.ObjectName is not null)
+        {
+            arguments[ObjectArgumentName] = request.ObjectName;
+        }
+
+        arguments[_options.SecretKeyArgument] = request.Key;
         return arguments;
     }
 
-    private string? InterpretErrorResult(string key, CallToolResult result)
+    private static string ReadResultText(CallToolResult result)
+        => string.Join(Environment.NewLine, result.Content.OfType<TextContentBlock>().Select(block => block.Text));
+
+    private static void ThrowIfDuplicateKey(GetToolRequest request, string text)
+    {
+        if (text.Contains("More than one result was found", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new DuplicateSecretKeyException(request.Key);
+        }
+    }
+
+    private static Credential? ParseCredential(GetToolRequest request, string text)
+    {
+        try
+        {
+            using var document = JsonDocument.Parse(text);
+            var item = GetSingleItem(request, document.RootElement);
+            return item.ValueKind == JsonValueKind.Object ? ReadCredential(item) : null;
+        }
+        catch (JsonException ex)
+        {
+            throw new SecretStoreException("Bitwarden MCP item response was not valid JSON.", ex);
+        }
+    }
+
+    private static JsonElement GetSingleItem(GetToolRequest request, JsonElement root)
+    {
+        if (root.ValueKind != JsonValueKind.Array)
+        {
+            return root;
+        }
+
+        var itemCount = root.GetArrayLength();
+        if (itemCount > 1)
+        {
+            throw new DuplicateSecretKeyException(request.Key);
+        }
+
+        return itemCount == 0 ? default : root[0];
+    }
+
+    private static Credential? ReadCredential(JsonElement item)
+    {
+        if (!item.TryGetProperty("login", out var login))
+        {
+            return null;
+        }
+
+        if (login.ValueKind != JsonValueKind.Object)
+        {
+            return null;
+        }
+
+        var username = ReadStringProperty(login, "username");
+        var password = ReadStringProperty(login, "password");
+        return username is null || password is null ? null : new Credential(username, password);
+    }
+
+    private static string? ReadStringProperty(JsonElement element, string name)
+        => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String
+            ? value.GetString()
+            : null;
+
+    private string? InterpretErrorResult(GetToolRequest request, CallToolResult result)
     {
         var errorText = result.Content.OfType<TextContentBlock>().FirstOrDefault()?.Text;
         if (IsNotFound(errorText))
@@ -141,10 +250,13 @@ public sealed partial class BitwardenMcpSecretStore : ISecretStore
             return null;
         }
 
-        throw new SecretStoreException(
-            $"Bitwarden MCP tool '{_options.GetSecretTool}' failed for '{key}'" +
-            (string.IsNullOrWhiteSpace(errorText) ? "." : $": {errorText}"));
+        throw CreateToolErrorException(request, errorText);
     }
+
+    private SecretStoreException CreateToolErrorException(GetToolRequest request, string? errorText)
+        => new(
+            $"Bitwarden MCP tool '{_options.GetSecretTool}' failed for '{request.Key}'" +
+            (string.IsNullOrWhiteSpace(errorText) ? "." : $": {errorText}"));
 
     private async Task PerformPreflightCheckAsync(McpClient client, CancellationToken ct)
     {

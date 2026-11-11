@@ -320,6 +320,9 @@ internal sealed class FakeSecretStore(string? secretValue) : ISecretStore
         return Task.FromResult(_secretValue);
     }
 
+    public async Task<Credential?> GetCredentialAsync(string key, CancellationToken cancellationToken = default) =>
+        await GetSecretAsync(key, cancellationToken) is { } value ? new Credential(value, value) : null;
+
     public Task<bool> SecretExistsAsync(string key, CancellationToken cancellationToken = default) =>
         Task.FromResult(_secretValue is not null);
 }

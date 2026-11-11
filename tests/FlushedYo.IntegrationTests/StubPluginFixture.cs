@@ -26,7 +26,7 @@ internal static class StubPluginFixture
         string type = DefaultType,
         string version = "1.0.0",
         string capabilitiesJson = "[\"download-transactions\"]",
-        string? credentialKeysJson = null)
+        string? credentialKey = null)
     {
         var folder = Path.Combine(pluginsRoot, name);
         Directory.CreateDirectory(folder);
@@ -52,9 +52,9 @@ internal static class StubPluginFixture
             File.WriteAllText(Path.Combine(folder, "stub.json"), stubJson);
         }
 
-        if (credentialKeysJson is not null)
+        if (credentialKey is not null)
         {
-            File.WriteAllText(Path.Combine(folder, "config.json"), $$"""{ "credentialKeys": {{credentialKeysJson}} }""");
+            File.WriteAllText(Path.Combine(folder, "config.json"), $$"""{ "credentialKey": "{{credentialKey}}" }""");
         }
 
         return folder;

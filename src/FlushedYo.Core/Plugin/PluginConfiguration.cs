@@ -18,18 +18,6 @@ public sealed record PluginConfiguration
     /// <summary>Whether browser automation runs headless. Defaults to <see langword="true"/>.</summary>
     public bool Headless { get; init; } = true;
 
-    /// <summary>Secret-store key names the plugin uses to resolve its credentials.</summary>
-    public PluginCredentialKeys CredentialKeys { get; init; } = new();
-}
-
-/// <summary>
-/// Secret-store key names (not values) a plugin uses to look up its credentials.
-/// </summary>
-public sealed record PluginCredentialKeys
-{
-    /// <summary>Secret-store key for the account username, for example <c>fidelity/username</c>.</summary>
-    public string? Username { get; init; }
-
-    /// <summary>Secret-store key for the account password, for example <c>fidelity/password</c>.</summary>
-    public string? Password { get; init; }
+    /// <summary>Secret-store key for the plugin's login credential, for example <c>fidelity/mmann</c>.</summary>
+    public string? CredentialKey { get; init; }
 }

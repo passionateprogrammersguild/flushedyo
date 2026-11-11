@@ -312,6 +312,9 @@ public sealed class PluginAssemblyLoaderTests
         public Task<string?> GetSecretAsync(string key, CancellationToken cancellationToken = default) =>
             Task.FromResult(_keys.Contains(key) ? SecretValue : null);
 
+        public Task<Credential?> GetCredentialAsync(string key, CancellationToken cancellationToken = default) =>
+            Task.FromResult<Credential?>(_keys.Contains(key) ? new Credential(SecretValue, SecretValue) : null);
+
         public Task<bool> SecretExistsAsync(string key, CancellationToken cancellationToken = default) =>
             Task.FromResult(_keys.Contains(key));
     }

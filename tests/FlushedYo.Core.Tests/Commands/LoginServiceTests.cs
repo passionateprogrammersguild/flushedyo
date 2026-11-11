@@ -14,88 +14,85 @@ public sealed class LoginServiceTests
     private static FakeSecretStore StoreWith(params string[] keys) =>
         new(keys.ToDictionary(static key => key, static _ => SecretValue));
 
-    [Fact]
-    public async Task BothKeysPresent_AreOk()
+    private static async Task<LoginReport> CheckUnconfiguredAsync(string? key)
     {
-        var report = await new LoginService(StoreWith("a/user", "a/pass"))
-            .CheckAsync([Descriptor("a", "a/user", "a/pass")], Token);
+        var store = StoreWith();
+        var report = await new LoginService(store).CheckAsync([Descriptor("a", key)], Token);
+
+        Assert.Empty(store.CheckedKeys);
+        var check = Assert.Single(Assert.Single(report.Plugins).Credentials);
+        Assert.Equal(new CredentialCheck("credential", null, CredentialStatus.NotConfigured), check);
+        return report;
+    }
+
+    [Fact]
+    public async Task CredentialPresent_IsOk()
+    {
+        var store = StoreWith("a/user");
+
+        var report = await new LoginService(store).CheckAsync([Descriptor("a", "a/user")], Token);
 
         var result = Assert.Single(report.Plugins);
-        Assert.Equal(
-            [new CredentialCheck("username", "a/user", CredentialStatus.Ok), new CredentialCheck("password", "a/pass", CredentialStatus.Ok)],
-            result.Credentials);
+        Assert.Equal([new CredentialCheck("credential", "a/user", CredentialStatus.Ok)], result.Credentials);
+        Assert.Equal(["a/user"], store.CheckedKeys);
         Assert.False(report.HasMissing);
     }
 
     [Fact]
-    public async Task OneKeyMissing_IsReported()
+    public async Task CredentialMissing_IsReported()
     {
-        var report = await new LoginService(StoreWith("a/user"))
-            .CheckAsync([Descriptor("a", "a/user", "a/pass")], Token);
+        var report = await new LoginService(StoreWith()).CheckAsync([Descriptor("a", "a/user")], Token);
 
-        var checks = Assert.Single(report.Plugins).Credentials;
-        Assert.Equal(CredentialStatus.Ok, checks[0].Status);
-        Assert.Equal(CredentialStatus.Missing, checks[1].Status);
+        var check = Assert.Single(Assert.Single(report.Plugins).Credentials);
+        Assert.Equal(CredentialStatus.Missing, check.Status);
         Assert.True(report.HasMissing);
     }
 
     [Fact]
-    public async Task NoKeysConfigured_AreNotConfigured_AndTheStoreIsNeverAsked()
+    public async Task NoKeyConfigured_IsNotConfigured_AndTheStoreIsNeverAsked()
     {
-        var store = StoreWith();
+        var report = await CheckUnconfiguredAsync(null);
 
-        var report = await new LoginService(store).CheckAsync([Descriptor("a")], Token);
-
-        var checks = Assert.Single(report.Plugins).Credentials;
-        Assert.Equal(
-            [new CredentialCheck("username", null, CredentialStatus.NotConfigured), new CredentialCheck("password", null, CredentialStatus.NotConfigured)],
-            checks);
-        Assert.Empty(store.CheckedKeys);
         Assert.False(report.HasMissing);
     }
 
     [Fact]
-    public async Task OnlyAUsernameKey_ChecksTheUsernameAndLeavesThePasswordNotConfigured()
+    public async Task BlankKey_IsNotConfigured_AndTheStoreIsNeverAsked()
     {
-        var store = StoreWith("a/user");
+        var report = await CheckUnconfiguredAsync(" \t");
 
-        var report = await new LoginService(store).CheckAsync([Descriptor("a", usernameKey: "a/user")], Token);
-
-        var checks = Assert.Single(report.Plugins).Credentials;
-        Assert.Equal(CredentialStatus.Ok, checks[0].Status);
-        Assert.Equal(CredentialStatus.NotConfigured, checks[1].Status);
-        Assert.Equal(["a/user"], store.CheckedKeys);
+        Assert.Equal("a", Assert.Single(report.Plugins).Plugin);
     }
 
     [Fact]
-    public async Task Plugins_KeepInputOrder_WithUsernameBeforePassword()
+    public async Task Plugins_KeepInputOrder_WithOneCredentialEach()
     {
-        var report = await new LoginService(StoreWith())
-            .CheckAsync([Descriptor("zeta", "z/u", "z/p"), Descriptor("alpha", "a/u", "a/p")], Token);
+        var report = await new LoginService(StoreWith("z/u", "a/u"))
+            .CheckAsync([Descriptor("zeta", "z/u"), Descriptor("alpha", "a/u")], Token);
 
         Assert.Equal(["zeta", "alpha"], report.Plugins.Select(static plugin => plugin.Plugin).ToArray());
-        Assert.All(report.Plugins, plugin => Assert.Equal(["username", "password"], plugin.Credentials.Select(static check => check.Credential).ToArray()));
+        Assert.All(report.Plugins, plugin => Assert.Equal("credential", Assert.Single(plugin.Credentials).Credential));
     }
 
     [Fact]
     public async Task GetSecretAsync_IsNeverCalled()
     {
         // FakeSecretStore.GetSecretAsync throws, so completing without an exception proves it was not called.
-        var report = await new LoginService(StoreWith("a/user", "a/pass"))
-            .CheckAsync([Descriptor("a", "a/user", "a/pass")], Token);
+        var report = await new LoginService(StoreWith("a/user"))
+            .CheckAsync([Descriptor("a", "a/user")], Token);
 
         Assert.False(report.HasMissing);
     }
 
     [Fact]
-    public async Task SecretStoreException_Propagates()
+    public async Task DuplicateSecretKeyException_Propagates()
     {
-        var store = new FakeSecretStore(existsFailure: new SecretStoreException("vault is locked"));
+        var store = new FakeSecretStore(existsFailure: new DuplicateSecretKeyException("a/user"));
 
-        var exception = await Assert.ThrowsAsync<SecretStoreException>(() =>
-            new LoginService(store).CheckAsync([Descriptor("a", "a/user", "a/pass")], Token));
+        var exception = await Assert.ThrowsAsync<DuplicateSecretKeyException>(() =>
+            new LoginService(store).CheckAsync([Descriptor("a", "a/user")], Token));
 
-        Assert.Equal("vault is locked", exception.Message);
+        Assert.Contains("a/user", exception.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -105,7 +102,7 @@ public sealed class LoginServiceTests
         await cts.CancelAsync();
 
         await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            new LoginService(StoreWith()).CheckAsync([Descriptor("a", "a/user", "a/pass")], cts.Token));
+            new LoginService(StoreWith()).CheckAsync([Descriptor("a", "a/user")], cts.Token));
     }
 
     [Fact]
@@ -117,8 +114,8 @@ public sealed class LoginServiceTests
     [Fact]
     public async Task Report_NeverContainsTheSecretValues()
     {
-        var report = await new LoginService(StoreWith("a/user", "a/pass"))
-            .CheckAsync([Descriptor("a", "a/user", "a/pass")], Token);
+        var report = await new LoginService(StoreWith("a/user"))
+            .CheckAsync([Descriptor("a", "a/user")], Token);
 
         Assert.DoesNotContain(SecretValue, CliJson.Serialize(report), StringComparison.Ordinal);
     }

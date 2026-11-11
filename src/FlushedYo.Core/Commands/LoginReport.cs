@@ -13,18 +13,18 @@ public enum CredentialStatus
     NotConfigured,
 }
 
-/// <summary>The result of checking one credential of one plugin.</summary>
-/// <param name="Credential">Which credential: <c>username</c> or <c>password</c>.</param>
+/// <summary>The result of checking one plugin's login credential.</summary>
+/// <param name="Credential">The credential kind: <c>credential</c>.</param>
 /// <param name="Key">
-/// The secret-store key <em>name</em> from <c>config.json</c> (for example <c>fidelity/username</c>), never a
+/// The secret-store key <em>name</em> from <c>config.json</c> (for example <c>fidelity/mmann</c>), never a
 /// secret value. <see langword="null"/> when <paramref name="Status"/> is <see cref="CredentialStatus.NotConfigured"/>.
 /// </param>
 /// <param name="Status">Whether the key resolved.</param>
 public sealed record CredentialCheck(string Credential, string? Key, CredentialStatus Status);
 
-/// <summary>The credential checks for one plugin.</summary>
+/// <summary>The credential check for one plugin.</summary>
 /// <param name="Plugin">Plugin name.</param>
-/// <param name="Credentials">The username check, then the password check.</param>
+/// <param name="Credentials">The single login credential check.</param>
 public sealed record PluginLoginResult(string Plugin, IReadOnlyList<CredentialCheck> Credentials);
 
 /// <summary>The outcome of <c>login</c> across the selected plugins.</summary>

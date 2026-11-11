@@ -35,7 +35,7 @@ public sealed class LoginCommandTests
     [Fact]
     public async Task AllOk_ReturnsZero_WithATableAndNoErrorOutput()
     {
-        var (exitCode, output, error) = await RunAsync(Table, StoreWith("a/u", "a/p"), Descriptor("a", "a/u", "a/p"));
+        var (exitCode, output, error) = await RunAsync(Table, StoreWith("a/u"), Descriptor("a", "a/u"));
 
         Assert.Equal(0, exitCode);
         Assert.Contains("ok", output, StringComparison.Ordinal);
@@ -45,7 +45,7 @@ public sealed class LoginCommandTests
     [Fact]
     public async Task AnyMissing_ReturnsOne_AndExplainsOnStderr()
     {
-        var (exitCode, output, error) = await RunAsync(Table, StoreWith("a/u"), Descriptor("a", "a/u", "a/p"));
+        var (exitCode, output, error) = await RunAsync(Table, StoreWith(), Descriptor("a", "a/u"));
 
         Assert.Equal(1, exitCode);
         Assert.Contains("missing", output, StringComparison.Ordinal);
@@ -55,7 +55,7 @@ public sealed class LoginCommandTests
     [Fact]
     public async Task JsonOutput_ParsesAndKeepsStderrEmpty_EvenWhenSomethingIsMissing()
     {
-        var (exitCode, output, error) = await RunAsync(new CommandLineOptions(null, true), StoreWith("a/u"), Descriptor("a", "a/u", "a/p"));
+        var (exitCode, output, error) = await RunAsync(new CommandLineOptions(null, true), StoreWith(), Descriptor("a", "a/u"));
 
         Assert.Equal(1, exitCode);
         Assert.Equal("", error);
@@ -64,20 +64,20 @@ public sealed class LoginCommandTests
     }
 
     [Fact]
-    public async Task PluginFlag_ChecksOnlyThatPluginsKeys()
+    public async Task PluginFlag_ChecksOnlyThatPluginsKey()
     {
-        var store = StoreWith("a/u", "a/p", "b/u", "b/p");
+        var store = StoreWith("a/u", "b/u");
 
-        var (exitCode, _, _) = await RunAsync(new CommandLineOptions("b", false), store, Descriptor("a", "a/u", "a/p"), Descriptor("b", "b/u", "b/p"));
+        var (exitCode, _, _) = await RunAsync(new CommandLineOptions("b", false), store, Descriptor("a", "a/u"), Descriptor("b", "b/u"));
 
         Assert.Equal(0, exitCode);
-        Assert.Equal(["b/u", "b/p"], store.CheckedKeys);
+        Assert.Equal(["b/u"], store.CheckedKeys);
     }
 
     [Fact]
     public async Task UnknownPlugin_ReturnsOne_WithTheSelectorMessageAndNoOutput()
     {
-        var (exitCode, output, error) = await RunAsync(new CommandLineOptions("nope", false), StoreWith(), Descriptor("a", "a/u", "a/p"));
+        var (exitCode, output, error) = await RunAsync(new CommandLineOptions("nope", false), StoreWith(), Descriptor("a", "a/u"));
 
         Assert.Equal(1, exitCode);
         Assert.Equal("", output);
@@ -99,14 +99,14 @@ public sealed class LoginCommandTests
     {
         var store = new FakeSecretStore(existsFailure: new SecretStoreException("vault is locked"));
 
-        await Assert.ThrowsAsync<SecretStoreException>(() => RunAsync(Table, store, Descriptor("a", "a/u", "a/p")));
+        await Assert.ThrowsAsync<SecretStoreException>(() => RunAsync(Table, store, Descriptor("a", "a/u")));
     }
 
     [Fact]
     public async Task Output_NeverContainsTheSecretValues()
     {
-        var (_, output, error) = await RunAsync(Table, StoreWith("a/u", "a/p"), Descriptor("a", "a/u", "a/p"));
-        var (_, jsonOutput, jsonError) = await RunAsync(new CommandLineOptions(null, true), StoreWith("a/u", "a/p"), Descriptor("a", "a/u", "a/p"));
+        var (_, output, error) = await RunAsync(Table, StoreWith("a/u"), Descriptor("a", "a/u"));
+        var (_, jsonOutput, jsonError) = await RunAsync(new CommandLineOptions(null, true), StoreWith("a/u"), Descriptor("a", "a/u"));
 
         Assert.All(
             new[] { output, error, jsonOutput, jsonError },

@@ -339,6 +339,12 @@ internal sealed class InMemorySecretStore(IReadOnlyDictionary<string, string> se
         return Task.FromResult(secrets.TryGetValue(key, out var value) ? value : null);
     }
 
+    public Task<Credential?> GetCredentialAsync(string key, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult<Credential?>(secrets.TryGetValue(key, out var value) ? new Credential(value, value) : null);
+    }
+
     public Task<bool> SecretExistsAsync(string key, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();

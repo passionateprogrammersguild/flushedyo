@@ -71,8 +71,8 @@ internal sealed class CliWorkspace : IDisposable
         string name,
         string? stubJson = null,
         string type = StubPluginFixture.DefaultType,
-        string? credentialKeysJson = null) =>
-        StubPluginFixture.CreatePlugin(PluginsRoot, name, stubJson, type, credentialKeysJson: credentialKeysJson);
+        string? credentialKey = null) =>
+        StubPluginFixture.CreatePlugin(PluginsRoot, name, stubJson, type, credentialKey: credentialKey);
 
     /// <summary>Installs a descriptor-only plugin (no executable assembly).</summary>
     public string AddDescriptorOnlyPlugin(string name) =>

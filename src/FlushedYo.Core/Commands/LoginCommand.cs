@@ -4,7 +4,7 @@ namespace FlushedYo.Core.Commands;
 
 /// <summary>
 /// <c>flushedyo login [--plugin &lt;name&gt;] [--json]</c>: a credential preflight. It reports whether each
-/// selected plugin's credential keys exist in the secret store and persists nothing.
+/// selected plugin's credential key resolves in the secret store and persists nothing.
 /// </summary>
 /// <remarks>
 /// Exit codes: <c>0</c> when no credential is missing, <c>1</c> for an unknown plugin or any missing credential.

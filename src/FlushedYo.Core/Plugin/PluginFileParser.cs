@@ -153,11 +153,7 @@ public static partial class PluginFileParser
             BitwardenMcpUrl = ParseUrl(dto.BitwardenMcpUrl, "bitwardenMcpUrl", source),
             PlaywrightMcpUrl = ParseUrl(dto.PlaywrightMcpUrl, "playwrightMcpUrl", source),
             Headless = dto.Headless ?? true,
-            CredentialKeys = new PluginCredentialKeys
-            {
-                Username = dto.CredentialKeys?.Username,
-                Password = dto.CredentialKeys?.Password,
-            },
+            CredentialKey = dto.CredentialKey,
         };
     }
 
@@ -278,14 +274,7 @@ public static partial class PluginFileParser
 
         public bool? Headless { get; set; }
 
-        public CredentialKeysDto? CredentialKeys { get; set; }
-    }
-
-    private sealed class CredentialKeysDto
-    {
-        public string? Username { get; set; }
-
-        public string? Password { get; set; }
+        public string? CredentialKey { get; set; }
     }
 
     /// <summary>Carries the JSON text and its path so error messages need no extra string parameter.</summary>

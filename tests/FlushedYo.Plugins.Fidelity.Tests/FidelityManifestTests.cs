@@ -31,8 +31,7 @@ public sealed class FidelityManifestTests
             Assert.Equal([PluginCapability.DownloadTransactions], plugin.Capabilities);
             Assert.Null(plugin.Manifest.Assembly);
             Assert.Null(plugin.Manifest.Type);
-            Assert.Equal("fidelity/username", plugin.Configuration.CredentialKeys.Username);
-            Assert.Equal("fidelity/password", plugin.Configuration.CredentialKeys.Password);
+            Assert.Equal("fidelity/mmann", plugin.Configuration.CredentialKey);
         }
         finally
         {

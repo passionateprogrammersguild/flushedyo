@@ -12,9 +12,9 @@ internal sealed class StubPluginCatalog(params PluginDescriptor[] plugins) : IPl
 /// <summary>Builders for command tests.</summary>
 internal static class CommandTestData
 {
-    public static PluginDescriptor Descriptor(string name, string? usernameKey = null, string? passwordKey = null) =>
+    public static PluginDescriptor Descriptor(string name, string? credentialKey = null) =>
         new(
             new PluginManifest { Name = name, Version = "1.0.0" },
-            new PluginConfiguration { CredentialKeys = new PluginCredentialKeys { Username = usernameKey, Password = passwordKey } },
+            new PluginConfiguration { CredentialKey = credentialKey },
             "/plugins/" + name);
 }
